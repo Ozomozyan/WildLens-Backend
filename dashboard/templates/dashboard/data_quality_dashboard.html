@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Data Quality Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <h1>Data Quality Dashboard</h1>
+
+  {% if error %}
+    <p style="color: red;">{{ error }}</p>
+  {% else %}
+    <!-- 1) A dropdown form to pick which table we want to see -->
+    <form method="GET" action="">
+      <label for="table_name">Choose a table:</label>
+      <select id="table_name" name="table_name" onchange="this.form.submit()">
+        <!-- We'll highlight whichever is currently requested -->
+        <option value="infos_especes"
+          {% if table_requested == "infos_especes" %}selected{% endif %}>
+          infos_especes
+        </option>
+        <option value="footprint_images"
+          {% if table_requested == "footprint_images" %}selected{% endif %}>
+          footprint_images
+        </option>
+        <!-- Add more if needed -->
+      </select>
+    </form>
+
+    <hr/>
+
+    <h2>Latest Data Quality Results (by table)</h2>
+    <table border="1" style="border-collapse: collapse;">
+      <thead>
+        <tr>
+          <th>Table Name</th>
+          <th>Execution Time</th>
+          <th>Test Vector</th>
+          <th>Error Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in latest_results %}
+          <tr>
+            <td>{{ row.table_name }}</td>
+            <td>{{ row.execution_time }}</td>
+            <td>{{ row.tests }}</td>
+            <td>{{ row.error_description }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <hr/>
+
+    <!-- 2) Chart for the chosen table (only if we have some dimension data) -->
+    <h2>Exhaustivité / Pertinence / Exactitude for "{{ table_requested }}"</h2>
+    <canvas id="qcChart" width="600" height="300"></canvas>
+
+    <script>
+      // parse the arrays
+      const times = JSON.parse('{{ dimension_times_json|safe }}');
+      const exhaustData = JSON.parse('{{ dimension_exhaust_json|default:"[]"|safe }}');
+      const pertinenceData = JSON.parse('{{ dimension_pertinence_json|default:"[]"|safe }}');
+      const exactitudeData = JSON.parse('{{ dimension_exactitude_json|default:"[]"|safe }}');
+
+      console.log("table_requested:", "{{ table_requested }}");
+      console.log("times:", times);
+      console.log("exhaustData:", exhaustData);
+      console.log("pertinenceData:", pertinenceData);
+      console.log("exactitudeData:", exactitudeData);
+
+      // Build a line chart with 3 lines, if we have data
+      const ctx = document.getElementById('qcChart').getContext('2d');
+      new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: times,
+          datasets: [
+            {
+              label: 'Exhaustivité',
+              data: exhaustData,
+              borderColor: 'blue',
+              pointRadius: 4
+            },
+            {
+              label: 'Pertinence',
+              data: pertinenceData,
+              borderColor: 'green',
+              pointRadius: 4
+            },
+            {
+              label: 'Exactitude',
+              data: exactitudeData,
+              borderColor: 'red',
+              pointRadius: 4
+            }
+          ]
+        },
+        options: {
+          scales: {
+            y: {
+              beginAtZero: true,
+              max: 2,
+              ticks: { stepSize: 1 }
+            }
+          }
+        }
+      });
+    </script>
+  {% endif %}
+</body>
+</html>

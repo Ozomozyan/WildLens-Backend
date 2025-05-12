@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Admin Dashboard</title>
+  <!-- Include Chart.js via CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <h1>Admin Dashboard</h1>
+
+  <p>
+    <a href="{% url 'data_quality_dashboard' %}">View Data Quality Dashboard</a>
+  </p>
+
+  <!-- 1) Bar Chart: "Images by Species" -->
+  <h2>Images by Species</h2>
+  <canvas id="chartImagesBySpecies" width="400" height="200"></canvas>
+
+  <!-- 2) Pie Chart: "Number of Species by Family" -->
+  <h2>Species Count by Family</h2>
+  <canvas id="chartSpeciesByFamily" width="400" height="200"></canvas>
+
+  <!-- 3) Bar Chart: "Completeness by Species" -->
+  <!-- For example, near "Data Completeness (%) by Species" heading -->
+  <h2>Data Completeness (%) by Species</h2>
+  <button onclick="runETL()">Run ETL Now</button>
+  <canvas id="chartCompleteness" width="400" height="200"></canvas>
+
+  <script>
+  function runETL() {
+    fetch("{% url 'run_etl_github' %}", {
+      method: "POST",
+      headers: {
+        "X-CSRFToken": "{{ csrf_token }}",  // if using Django's default CSRF
+      },
+    })
+    .then(response => response.json())
+    .then(data => {
+      if (data.error) {
+        alert("Error: " + data.error);
+      } else {
+        alert("Success: " + data.message);
+      }
+    })
+    .catch(err => alert("Fetch error: " + err));
+  }
+  </script>
+
+  <!-- 4) (Optional) Another Chart: Region distribution -->
+  <h2>Species Distribution by Region</h2>
+  <canvas id="chartRegionDistribution" width="400" height="200"></canvas>
+
+  <!-- 5) Detailed table of species -->
+  <h2>Species Details</h2>
+  <table border="1" style="border-collapse: collapse;">
+    <thead>
+      <tr>
+        <th>Espèce</th>
+        <th>Famille</th>
+        <th>Taille</th>
+        <th>Région</th>
+        <th>Images Count</th>
+        <th>Completeness (%)</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in species_summary %}
+      <tr>
+        <td>{{ row.species_name }}</td>
+        <td>{{ row.family }}</td>
+        <td>{{ row.taille }}</td>
+        <td>{{ row.region }}</td>
+        <td>{{ row.total_images }}</td>
+        <td>{{ row.completeness_percentage|floatformat:2 }}%</td>
+        <td>{{ row.description }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <!-- Script to build the charts -->
+  <script>
+    // Retrieve all the JSON data passed from the view
+    const speciesNames = JSON.parse('{{ species_names_json|safe }}'); 
+    const imagesCount = JSON.parse('{{ images_count_json|safe }}');
+    const familyLabels = JSON.parse('{{ family_labels_json|safe }}');
+    const familyValues = JSON.parse('{{ family_values_json|safe }}');
+    const completenessList = JSON.parse('{{ completeness_json|safe }}');
+    const regionLabels = JSON.parse('{{ region_labels_json|safe }}');
+    const regionValues = JSON.parse('{{ region_values_json|safe }}');
+
+    // 1) Chart: Images by Species (Bar)
+    const ctx1 = document.getElementById('chartImagesBySpecies').getContext('2d');
+    new Chart(ctx1, {
+      type: 'bar',
+      data: {
+        labels: speciesNames,
+        datasets: [{
+          label: 'Total Images',
+          data: imagesCount
+        }]
+      }
+    });
+
+    // 2) Chart: Species Count by Family (Pie)
+    const ctx2 = document.getElementById('chartSpeciesByFamily').getContext('2d');
+    new Chart(ctx2, {
+      type: 'pie',
+      data: {
+        labels: familyLabels,
+        datasets: [{
+          label: 'Species Count',
+          data: familyValues
+        }]
+      }
+    });
+
+    // 3) Chart: Data Completeness (Bar)
+    const ctx3 = document.getElementById('chartCompleteness').getContext('2d');
+    new Chart(ctx3, {
+      type: 'bar',
+      data: {
+        labels: speciesNames,
+        datasets: [{
+          label: 'Completeness (%)',
+          data: completenessList
+        }]
+      },
+      options: {
+        scales: {
+          y: {
+            beginAtZero: true,
+            max: 100
+          }
+        }
+      }
+    });
+
+    // 4) Chart: Region Distribution (Doughnut or Bar, etc.)
+    const ctx4 = document.getElementById('chartRegionDistribution').getContext('2d');
+    new Chart(ctx4, {
+      type: 'doughnut',
+      data: {
+        labels: regionLabels,
+        datasets: [{
+          label: 'Species Count by Region',
+          data: regionValues
+        }]
+      }
+    });
+  </script>
+</body>
+</html>

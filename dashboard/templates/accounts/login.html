@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Login with Supabase</title>
+</head>
+<body>
+    <h1>Login Page</h1>
+    <form method="POST" action="">
+        {% csrf_token %}
+        <label>Email:</label>
+        <input type="text" name="email" /><br><br>
+        <label>Password:</label>
+        <input type="password" name="password" /><br><br>
+        <input type="submit" value="Login" />
+    </form>
+</body>
+</html>
