@@ -1,0 +1,31 @@
+version: "3.9"
+services:
+  backend:
+    build: .
+    env_file: .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - ai
+    environment:
+      - AI_SERVICE_URL=http://ai:8001/predict
+    networks:
+      - wildlens
+    volumes:
+      - ./:/app                 # mount your backend source in‐container
+      - static_data:/app/static # optional: persist static/uploads
+
+  ai:
+    build: ./ai
+    ports:
+      - "8001:8001"
+    networks:
+      - wildlens
+    volumes:
+      - ./ai/:/app             # mount AI service code so you can iterate
+
+networks:
+  wildlens:
+
+volumes:
+  static_data:                 # optional named volume for persisted files

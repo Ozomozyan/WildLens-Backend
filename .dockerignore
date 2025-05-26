@@ -1,0 +1,25 @@
+# ─── Venvs & editors ─────────────────────────────────
+venv/
+.env
+*.env
+.idea/
+.vscode/
+
+# ─── Git & CI artefacts ─────────────────────────────
+.git/
+.gitignore
+*.log
+*.coverage
+
+# ─── Python byte-code ───────────────────────────────
+__pycache__/
+*.py[cod]
+
+# ─── Static/media built at runtime ──────────────────
+staticfiles/
+static/
+media/
+
+# ─── OS clutter ─────────────────────────────────────
+.DS_Store
+Thumbs.db

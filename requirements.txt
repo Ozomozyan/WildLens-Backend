@@ -1,0 +1,13 @@
+# requirements.txt  – common backend & AI dependencies
+
+# Supabase client
+supabase==2.15.1
+storage3==0.11.3
+
+# Env file loader
+python-dotenv==1.0.1
+gunicorn==21.2.0
+
+django==4.2.21
+djangorestframework==3.15.0
+django-cors-headers==4.0.0

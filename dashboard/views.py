@@ -7,9 +7,22 @@ from django.http import HttpResponse, JsonResponse
 from django.conf import settings
 from wildlens_backend.auth_decorators import supabase_admin_required
 from django.views.decorators.csrf import csrf_exempt
+from wildlens_backend.local_runner import start_training
 
 import json
 from collections import Counter
+
+# 🔧 PATCH ❶ – put near the other imports at the top
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+
+
+# ─── GitHub / workflow settings ────────────────────────────────────────────
+GITHUB_TOKEN  = os.getenv("GITHUB_TOKEN", None)           # same var you already use
+GITHUB_OWNER  = os.getenv("GITHUB_OWNER", "Ozomozyan")    # change if needed
+GITHUB_REPO   = os.getenv("GITHUB_REPO",  "MSPR_ETL")  # this project’s repo
+TRAIN_WORKFLOW = os.getenv("TRAIN_WORKFLOW", "MODEL_TRAIN.yml")
+
 
 def login_view(request):
     if request.method == "GET":
@@ -330,3 +343,18 @@ def run_etl_via_github(request):
             }, status=500)
     else:
         return JsonResponse({"error": "Only POST method allowed"}, status=405)
+
+
+@api_view(["POST"])
+@supabase_admin_required
+def run_training(request):
+    # default values if the admin doesn’t fill the form
+    batch_size = int(request.data.get("batch_size") or 32)
+    epochs     = int(request.data.get("epochs") or 10)
+
+    accepted = start_training(batch_size, epochs)
+    if not accepted:
+        return Response({"detail": "❗️Another training job is already running"},
+                        status=409)         # Conflict
+    return Response({"detail": "Training job started"},
+                    status=202)             # Accepted
