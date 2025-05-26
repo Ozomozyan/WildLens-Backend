@@ -1,17 +1,12 @@
 # ai/Dockerfile
-
 FROM python:3.12-slim
+RUN apt-get update && apt-get install -y curl
 WORKDIR /app
 
-# 1. Copy in your AI dependencies list
-COPY requirements.txt .
+COPY ai/requirements.txt ./ai/requirements.txt
+RUN pip install --no-cache-dir -r ai/requirements.txt
 
-# 2. Install everything in one go
-RUN pip install --no-cache-dir -r requirements.txt
-
-# 3. Copy the rest of your AI service code
-COPY . .
-
-# 4. Expose & run (adjust 'serve.py' to whatever your entrypoint is)
+COPY ai/ ./ai
+COPY api/ ./api
 EXPOSE 8001
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8001"]

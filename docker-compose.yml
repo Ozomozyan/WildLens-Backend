@@ -1,31 +1,42 @@
-version: "3.9"
 services:
+  ai:
+    build:
+      context: .               # ← use repo root so we can COPY both ai/ and api/
+      dockerfile: ai/Dockerfile
+    env_file: .env
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./ai/:/app/ai          # mount your ai code under /app/ai
+      - ./api/:/app/api        # mount your FastAPI code under /app/api
+    networks:
+      - wildlens
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   backend:
     build: .
     env_file: .env
+    depends_on:
+      ai:
+        condition: service_healthy
     ports:
       - "8000:8000"
-    depends_on:
-      - ai
     environment:
       - AI_SERVICE_URL=http://ai:8001/predict
+    volumes:
+      - ./:/app
+      - static_data:/app/static
     networks:
       - wildlens
-    volumes:
-      - ./:/app                 # mount your backend source in‐container
-      - static_data:/app/static # optional: persist static/uploads
-
-  ai:
-    build: ./ai
-    ports:
-      - "8001:8001"
-    networks:
-      - wildlens
-    volumes:
-      - ./ai/:/app             # mount AI service code so you can iterate
+    restart: unless-stopped
 
 networks:
   wildlens:
 
 volumes:
-  static_data:                 # optional named volume for persisted files
+  static_data:

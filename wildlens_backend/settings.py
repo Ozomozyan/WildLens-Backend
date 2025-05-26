@@ -12,6 +12,17 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 
 from pathlib import Path
 import os
+from datetime import timedelta
+from pathlib import Path
+from dotenv import load_dotenv
+from supabase import create_client, Client
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(os.path.join(BASE_DIR, ".env"))  # or just load_dotenv()
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
 
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -134,19 +145,23 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
 
+# ↓ add 'rest_framework_simplejwt.authentication.JWTAuthentication'
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": (
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+    ),
+    "DEFAULT_PERMISSION_CLASSES": (
+        "rest_framework.permissions.IsAuthenticated",
+    ),
+}
 
+# Tell Simple-JWT to accept “Bearer …” (default) and use your Supabase secret
+SIMPLE_JWT = {
+    "SIGNING_KEY": os.getenv("SUPABASE_JWT_SECRET"),
+    "ALGORITHM":   "HS256",
+    "ACCESS_TOKEN_LIFETIME": timedelta(hours=6),   # ignored for incoming tokens
+    "AUTH_HEADER_TYPES": ("Bearer",),
+}
 
-import os
-from pathlib import Path
-from dotenv import load_dotenv
-from supabase import create_client, Client
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-load_dotenv(os.path.join(BASE_DIR, ".env"))  # or just load_dotenv()
-
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
 
 SUPABASE_CLIENT: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
