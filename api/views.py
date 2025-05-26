@@ -10,7 +10,7 @@ from rest_framework import viewsets, status, permissions
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser
 from wildlens_backend.settings import SUPABASE_CLIENT  # 🔸 create a helper (see below)
-from ai.predict import predict_file                     # 🔸 already in repo
+from ai.predict import predict                     # 🔸 already in repo
 
 @method_decorator(csrf_exempt, name="dispatch")
 class PredictView(APIView):
@@ -81,7 +81,7 @@ class PredictionViewSet(viewsets.ViewSet):
                 tmp.write(chunk)
 
         try:
-            species = predict_file(temp_path)        # returns str
+            species = predict(temp_path)        # returns str
         finally:
             os.remove(temp_path)
 

@@ -68,13 +68,9 @@ else:
     classes = ckpt.pop("classes", None)
     if classes is None:
         classes = json.loads((MODEL_PATH.parent / "labels.json").read_text())
-    model   = models.resnet18(weights=None)
-    model.fc = torch.nn.Sequential(
-        torch.nn.Linear(model.fc.in_features, 256),
-        torch.nn.ReLU(inplace=True),
-        torch.nn.Dropout(0.4),
-        torch.nn.Linear(256, len(classes)),
-    )
+    model = models.resnet18(weights=None)
+    # — match the single‐Linear head you trained with —
+    model.fc = torch.nn.Linear(model.fc.in_features, len(classes))
     model.load_state_dict(ckpt)
 
 model.to(DEVICE).eval()
