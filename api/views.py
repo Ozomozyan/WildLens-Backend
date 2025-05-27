@@ -12,6 +12,16 @@ from rest_framework.parsers import MultiPartParser
 from wildlens_backend.settings import SUPABASE_CLIENT  # 🔸 create a helper (see below)
 from ai.predict import predict                     # 🔸 already in repo
 
+def _sb_for(request):
+    """
+    Return a Supabase client whose PostgREST layer is authenticated
+    with the JWT that arrived on this HTTP request.
+    """
+    jwt = request.headers.get("Authorization", "").split(" ", 1)[-1]
+    # clone-like behaviour: postgrest.auth() mutates in-place but is cheap
+    SUPABASE_CLIENT.postgrest.auth(jwt)
+    return SUPABASE_CLIENT
+
 @method_decorator(csrf_exempt, name="dispatch")
 class PredictView(APIView):
     """
@@ -49,7 +59,8 @@ class PredictionViewSet(viewsets.ViewSet):
     parser_classes = [MultiPartParser]
 
     def list(self, request):
-        resp = SUPABASE_CLIENT.table("predictions")\
+        sb = _sb_for(request)
+        resp = sb.table("predictions")\
                        .select("*")\
                        .eq("user_id", request.user.username)\
                        .order("created_at", desc=True)\
@@ -58,7 +69,8 @@ class PredictionViewSet(viewsets.ViewSet):
         return Response(resp.data)
 
     def retrieve(self, request, pk=None):
-        resp = SUPABASE_CLIENT.table("predictions")\
+        sb = _sb_for(request)
+        resp = sb.table("predictions")\
                        .select("*")\
                        .eq("id", pk)\
                        .eq("user_id", request.user.username)\
@@ -94,6 +106,7 @@ class PredictionViewSet(viewsets.ViewSet):
             "longitude": request.data.get("lon"),
             "notes": request.data.get("notes"),
         }
-        SUPABASE_CLIENT.table("predictions").insert(insert_payload).execute()
+        # Extract and forward the JWT on insert too
+        _sb_for(request).table("predictions").insert(insert_payload).execute()
 
         return Response({"prediction": species}, status=status.HTTP_201_CREATED)
