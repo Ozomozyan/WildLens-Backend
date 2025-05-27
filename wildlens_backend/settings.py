@@ -148,7 +148,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # ↓ add 'rest_framework_simplejwt.authentication.JWTAuthentication'
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "api.auth.SupabaseJWTAuthentication",
     ),
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
@@ -161,6 +161,8 @@ SIMPLE_JWT = {
     "ALGORITHM":   "HS256",
     "ACCESS_TOKEN_LIFETIME": timedelta(hours=6),   # ignored for incoming tokens
     "AUTH_HEADER_TYPES": ("Bearer",),
+    "USER_ID_CLAIM": "sub",
+    "JTI_CLAIM": None, 
 }
 
 

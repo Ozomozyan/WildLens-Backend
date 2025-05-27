@@ -51,7 +51,7 @@ class PredictionViewSet(viewsets.ViewSet):
     def list(self, request):
         resp = SUPABASE_CLIENT.table("predictions")\
                        .select("*")\
-                       .eq("user_id", str(request.user.id))\
+                       .eq("user_id", request.user.username)\
                        .order("created_at", desc=True)\
                        .limit(50)\
                        .execute()
@@ -61,7 +61,7 @@ class PredictionViewSet(viewsets.ViewSet):
         resp = SUPABASE_CLIENT.table("predictions")\
                        .select("*")\
                        .eq("id", pk)\
-                       .eq("user_id", str(request.user.id))\
+                       .eq("user_id", request.user.username)\
                        .single()\
                        .execute()
         if resp.data:
@@ -87,7 +87,7 @@ class PredictionViewSet(viewsets.ViewSet):
 
         # 3. Insert row in Supabase
         insert_payload = {
-            "user_id": str(request.user.id),
+            "user_id": request.user.username,
             "predicted_species": species,
             "location_text": request.data.get("location_text"),
             "latitude": request.data.get("lat"),
