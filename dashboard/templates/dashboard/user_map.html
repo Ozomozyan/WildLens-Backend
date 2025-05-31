@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Prediction Map</title>
+
+  <!-- Tailwind CSS for quick styling -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Leaflet + marker-cluster -->
+  <link rel="stylesheet"
+        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <link rel="stylesheet"
+        href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css">
+  <link rel="stylesheet"
+        href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css">
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+
+  <style>
+    #map { height: 75vh; }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-800 p-6">
+  <!-- ────── header / nav ────── -->
+  <header class="mb-6">
+    <h1 class="text-3xl font-bold">Global Predictions Map</h1>
+    <nav class="mt-2">
+      <a class="text-blue-600 hover:underline mr-4" href="{% url 'user_dashboard' %}">
+        My Dashboard
+      </a>
+      <a class="text-blue-600 hover:underline mr-4"
+         href="{% url 'user_species_summary' %}">
+        Species Summary
+      </a>
+      <span class="font-semibold text-blue-600">Map</span>
+      <a class="text-red-600 hover:underline ml-4" href="/logout/">
+        Log out
+      </a>
+    </nav>
+  </header>
+
+  <!-- ────── map container or error ────── -->
+  {% if error %}
+    <p class="text-red-600">{{ error }}</p>
+  {% else %}
+    <div id="map" class="rounded shadow"></div>
+  {% endif %}
+
+  <!-- ────── Leaflet setup ────── -->
+  {% if not error %}
+  <script>
+    // Points are injected by Django: [{"species_name":"Brown Bear","lat":48.3,"lon":-114.2}, …]
+    const points = {{ points_json|default:"[]"|safe }};
+
+    // 1. Base map
+    const map = L.map('map').setView([20, 0], 2);
+    L.tileLayer(
+      'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      { attribution: '© OpenStreetMap' }
+    ).addTo(map);
+
+    // 2. Cluster group for performance
+    const clusters = L.markerClusterGroup({ disableClusteringAtZoom: 8 });
+
+    // 3. Add points
+    points.forEach(p => {
+      if (!p.lat || !p.lon) return;        // skip bad rows
+      const marker = L.marker([p.lat, p.lon])
+                      .bindPopup(`<strong>${p.species_name}</strong>`);
+      clusters.addLayer(marker);
+    });
+
+    map.addLayer(clusters);
+  </script>
+  {% endif %}
+</body>
+</html>

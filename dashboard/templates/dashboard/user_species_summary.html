@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Species Summary</title>
+  <!-- Tailwind for quick styling -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+  // we'll render the Supabase token you stored in session
+  const TOKEN = "{{ request.session.supabase_token }}";
+</script>
+
+</head>
+<body class="bg-gray-50 text-gray-800 p-6">
+
+  <!-- Header & nav -->
+  <header class="mb-8">
+    <h1 class="text-4xl font-bold">Species Summary</h1>
+    <nav class="mt-2 space-x-4">
+      <a href="/user-dashboard/" class="text-blue-600 hover:underline">My Dashboard</a>
+      <a href="/user-dashboard/species-summary/" class="text-blue-600 hover:underline font-semibold">Species Summary</a>
+      <a href="/logout/" class="text-red-600 hover:underline">Log out</a>
+    </nav>
+  </header>
+
+  <!-- Species properties selector -->
+  <div class="bg-white p-6 rounded shadow mb-10">
+    <h2 class="text-2xl font-semibold mb-4">Species Properties</h2>
+    <select id="speciesSelect" class="border rounded p-2 w-full sm:w-1/2 mb-4">
+      <option value="" disabled selected>Select a species…</option>
+      {% for s in species_summary %}
+        <option value="{{ s.species_name }}">{{ s.species_name }}</option>
+      {% endfor %}
+    </select>
+    <div id="speciesDetails" class="prose"></div>
+  </div>
+
+  <!-- Charts grid -->
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-10">
+    <div class="bg-white p-4 rounded shadow">
+      <h2 class="text-xl font-semibold mb-2">Species Count by Family</h2>
+      <canvas id="pieChart"></canvas>
+    </div>
+    <div class="bg-white p-4 rounded shadow lg:col-span-2">
+      <h2 class="text-xl font-semibold mb-2">Region Distribution</h2>
+      <canvas id="regionChart"></canvas>
+    </div>
+  </div>
+
+  <!-- Summary table -->
+  <div class="bg-white p-4 rounded shadow mb-10">
+    <h2 class="text-2xl font-semibold mb-4">Species Details</h2>
+    <table class="min-w-full table-auto text-left">
+      <thead class="bg-gray-100">
+        <tr>
+          <th class="px-4 py-2">Species</th>
+          <th class="px-4 py-2">Family</th>
+          <th class="px-4 py-2">Regions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in species_summary %}
+        <tr class="border-t">
+          <td class="px-4 py-2">{{ s.species_name }}</td>
+          <td class="px-4 py-2">{{ s.family }}</td>
+          <td class="px-4 py-2">{{ s.region }}</td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="3" class="px-4 py-6 text-center text-gray-500">
+            No species data available.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    // Render the family-pie chart
+    new Chart(document.getElementById('pieChart'), {
+      type: 'pie',
+      data: {
+        labels: {{ family_labels_json|safe }},
+        datasets: [{
+          data: {{ family_values_json|safe }},
+          backgroundColor: [
+            'rgba(249, 115, 22, 0.7)',
+            'rgba(16, 185, 129, 0.7)',
+            'rgba(236, 72, 153, 0.7)',
+            'rgba(59, 130, 246, 0.7)'
+          ]
+        }]
+      }
+    });
+
+    // Render the region-bar chart
+    new Chart(document.getElementById('regionChart'), {
+      type: 'bar',
+      data: {
+        labels: {{ region_labels_json|safe }},
+        datasets: [{
+          label: 'Species Count',
+          data: {{ region_values_json|safe }},
+          backgroundColor: 'rgba(234, 179, 8, 0.7)'
+        }]
+      },
+      options: { scales: { y: { beginAtZero: true } } }
+    });
+
+    // Species properties panel logic
+    const select = document.getElementById('speciesSelect');
+    const details = document.getElementById('speciesDetails');
+
+    async function fetchSpeciesInfo(name) {
+      const res = await fetch(
+        `/api/species-info/?name=${encodeURIComponent(name)}`,
+        {
+          headers: {
+            "Authorization": `Bearer ${TOKEN}`
+          }
+        }
+      );
+      if (!res.ok) return null;
+      return await res.json();
+    }
+
+    function renderInfo(obj) {
+      if (!obj) {
+        details.innerHTML = '<p class="text-red-500">Information not found.</p>';
+        return;
+      }
+      details.innerHTML = `
+        <p><strong>Scientific name:</strong> ${obj.Espèce}</p>
+        <p><strong>Family:</strong> ${obj.Famille}</p>
+        <p><strong>Size:</strong> ${obj.Taille || '–'}</p>
+        <p><strong>Description:</strong> ${obj.Description || '–'}</p>
+        <p><strong>Habitat:</strong> ${obj.Habitat || '–'}</p>
+        <p><strong>Region:</strong> ${obj.Région || '–'}</p>
+        <p><strong>Fun fact:</strong> ${obj.Fun_fact || '–'}</p>
+      `;
+    }
+
+    select.addEventListener('change', async () => {
+      const name = select.value;
+      details.innerHTML = '<p>Loading…</p>';
+      const info = await fetchSpeciesInfo(name);
+      renderInfo(info);
+    });
+  </script>
+
+</body>
+</html>

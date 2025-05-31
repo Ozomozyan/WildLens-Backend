@@ -18,7 +18,7 @@
   <h1>Admin Dashboard</h1>
 
   <p>
-    <a href="{% url 'data_quality_dashboard' %}">View Data Quality Dashboard</a>
+    <a href="{% url 'data_quality' %}">View Data Quality Dashboard</a>
   </p>
 
   <!-- 1) Bar Chart: Images by Species -->
@@ -73,6 +73,7 @@
     <form method="post"
           action="{% url 'run_training' %}"
           hx-post="{% url 'run_training' %}"
+          hx-headers='{"Authorization":"Bearer {{ request.session.supabase_token }}"}'
           hx-swap="outerHTML">
       {% csrf_token %}
       <label>
@@ -90,7 +91,7 @@
   <!-- Scripts -->
   <script>
     function runETL() {
-      fetch("{% url 'run_etl_github' %}", {
+      fetch("{% url 'run_etl' %}", {
         method: "POST",
         headers: { "X-CSRFToken": "{{ csrf_token }}" }
       })

@@ -1,6 +1,6 @@
 # dashboard/views.py
 
-import os
+import os, jwt
 import requests
 from django.shortcuts import render, redirect
 from django.http import HttpResponse, JsonResponse
@@ -8,6 +8,12 @@ from django.conf import settings
 from wildlens_backend.auth_decorators import supabase_admin_required
 from django.views.decorators.csrf import csrf_exempt
 from wildlens_backend.local_runner import start_training
+from wildlens_backend.auth_decorators import supabase_login_required
+import json, datetime
+from django.views.decorators.cache import cache_page
+from django.views.decorators.http import require_GET
+from wildlens_backend.auth_decorators import supabase_login_required
+
 
 import json
 from collections import Counter
@@ -28,31 +34,48 @@ def login_view(request):
     if request.method == "GET":
         return render(request, "accounts/login.html")
 
-    email = request.POST.get("email")
-    password = request.POST.get("password")
+    email    = request.POST["email"]
+    password = request.POST["password"]
 
-    # 1. Make the POST request to Supabase /auth/v1/token?grant_type=password
-    SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-    SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
-    endpoint = f"{SUPABASE_URL}/auth/v1/token?grant_type=password"
-    headers = {
-        "apikey": SUPABASE_KEY,
+    # 1) Exchange creds for a Supabase JWT
+    endpoint = f"{os.getenv('SUPABASE_URL')}/auth/v1/token?grant_type=password"
+    headers  = {
+        "apikey":       os.getenv("SUPABASE_KEY", ""),
         "Content-Type": "application/json",
     }
     resp = requests.post(endpoint, json={"email": email, "password": password}, headers=headers)
     if resp.status_code != 200:
         return HttpResponse("Login failed. Check your credentials.", status=401)
 
-    data = resp.json()
-    token = data.get("access_token")
+    token = resp.json().get("access_token")
     if not token:
         return HttpResponse("No token returned by Supabase.", status=401)
 
-    # 2. Store token in the session
-    request.session["supabase_token"] = token
+    # 2) Decode the JWT, inspect app_metadata.role
+    try:
+        claims = jwt.decode(token, options={"verify_signature": False})
+    except jwt.PyJWTError:
+        return HttpResponse("Could not decode Supabase token.", status=500)
 
-    # 3. Redirect to admin dashboard
-    return redirect("/admin-dashboard/")
+    app_meta = claims.get("app_metadata", {}) or {}
+    is_admin = app_meta.get("role") == "admin"
+
+    # 3) Store in session for later use
+    request.session["supabase_token"] = token
+    request.session["supabase_uid"]   = claims["sub"]
+
+    # 3b) ALSO set a non-HttpOnly cookie so our JS can read it
+    redirect_to = "/admin-dashboard/" if is_admin else "/user-dashboard/"
+    response = redirect(redirect_to)
+    response.set_cookie(
+        "supabase_token",
+        token,
+        httponly=False,    # allow JS access
+        samesite="Lax",    # adjust as needed
+        # secure=True      # uncomment if you’re on HTTPS
+    )
+
+    return response
 
 
 @supabase_admin_required
@@ -358,3 +381,200 @@ def run_training(request):
                         status=409)         # Conflict
     return Response({"detail": "Training job started"},
                     status=202)             # Accepted
+    
+    
+    
+    
+# ──────────────────────────────────────────────────────────
+@supabase_login_required          # normal user, not the admin-only decorator
+def user_dashboard(request):
+    """
+    Show the current user:
+      • recent predictions (table)
+      • pie   – species distribution
+      • line  – predictions over time
+    """
+
+    # (1) Who am I?
+    user_id = request.session.get("supabase_uid")          # your middleware sets this
+    if not user_id:
+        return redirect("/login/")
+
+    sb = settings.SUPABASE_CLIENT
+    try:
+        res = (
+            sb.table("predictions")
+              .select("*")
+              .eq("user_id", user_id)
+              .order("created_at", desc=True)
+              .limit(200)               # enough for the charts
+              .execute()
+        )
+        rows = res.data or []
+    except Exception as e:
+        return render(request, "dashboard/user_dashboard.html",
+                      {"error": f"Supabase query failed: {e}"})
+
+    # ---------- build datasets ----------
+    # table (last 25)
+    table_rows = rows[:25]
+
+    # pie – how many times each species was predicted
+    species_counter = {}
+    for r in rows:
+        label = r["predicted_species"]
+        species_counter[label] = species_counter.get(label, 0) + 1
+    pie_labels  = list(species_counter.keys())
+    pie_values  = list(species_counter.values())
+
+    # line – # predictions per day
+    daily_counter = {}
+    for r in rows:
+        day = r["created_at"][:10]            # YYYY-MM-DD
+        daily_counter[day] = daily_counter.get(day, 0) + 1
+    line_labels = sorted(daily_counter.keys())
+    line_values = [daily_counter[d] for d in line_labels]
+
+    context = {
+        "table_rows"     : table_rows,
+        "pie_labels_json": json.dumps(pie_labels),
+        "pie_values_json": json.dumps(pie_values),
+        "line_labels_json": json.dumps(line_labels),
+        "line_values_json": json.dumps(line_values),
+    }
+    return render(request, "dashboard/user_dashboard.html", context)
+
+
+# ──────────────────────────────────────────────────────────
+@supabase_login_required
+def user_species_summary(request):
+    """
+    Same aggregation logic as admin_dashboard but read-only
+    and open to all authenticated users.
+    """
+    try:
+        res_obj = (
+            settings.SUPABASE_CLIENT
+            .table("species_summary_v")
+            .select("*")
+            .execute()
+        )
+        data = res_obj.data or []
+    except Exception as e:
+        return render(
+            request,
+            "dashboard/user_species_summary.html",
+            {"error": f"Supabase query failed: {e}"}
+        )
+
+    if not data:
+        return render(
+            request,
+            "dashboard/user_species_summary.html",
+            {"error": "No data returned from 'species_summary_v'."}
+        )
+
+    # ────── Deduplicate & merge region buckets ──────
+    species_map = {}
+    for row in data:
+        sid = row["species_id"]
+        species_map.setdefault(sid, {
+            "species_id": sid,
+            "species_name": row["species_name"],
+            "family": row["family"],
+            "taille": row["taille"],
+            "description": row["description"],
+            "total_images": row["total_images"],
+            "completeness_percentage": row["completeness_percentage"],
+            "region_set": set()
+        })
+        bucket = row.get("region_bucket") or row.get("region") or ""
+        if bucket:
+            species_map[sid]["region_set"].add(bucket)
+
+    # ────── Build the table and aggregation counters ──────
+    unique_species = []
+    family_counter, region_counter = Counter(), Counter()
+
+    for s in species_map.values():
+        unique_species.append({
+            **s,
+            "region": ", ".join(sorted(s["region_set"]))
+        })
+        family_counter[s["family"]] += 1
+        for r in s["region_set"]:
+            region_counter[r] += 1
+
+    # ────── Prepare context (only family & region) ──────
+    context = {
+        "species_summary": unique_species,
+        "family_labels_json": json.dumps(list(family_counter.keys())),
+        "family_values_json": json.dumps(list(family_counter.values())),
+        "region_labels_json": json.dumps(list(region_counter.keys())),
+        "region_values_json": json.dumps(list(region_counter.values())),
+    }
+    return render(request, "dashboard/user_species_summary.html", context)
+
+
+
+@supabase_login_required
+@cache_page(60)              # 1-minute cache; map data doesn’t change often
+def user_predictions_map(request):
+    """
+    World map with every prediction's lat/lon + species label.
+    """
+    try:
+        res = (
+            settings.SUPABASE_CLIENT
+            .table("prediction_locations_v")
+            .select("species_name,lat,lon")
+            .execute()
+        )
+        # cast lat/lon to float to avoid JS "1E-5" strings
+        points = [
+            {"species_name": p["species_name"],
+             "lat": float(p["lat"]), "lon": float(p["lon"])}
+            for p in (res.data or [])
+        ]
+    except Exception as e:
+        return render(
+            request, "dashboard/user_map.html",
+            {"error": f"Supabase query failed: {e}"}
+        )
+
+    return render(request, "dashboard/user_map.html",
+                  {"points_json": json.dumps(points)})
+    
+    
+    
+    
+@require_GET
+@supabase_login_required
+def species_info_api(request):
+    """
+    GET /api/species-info?name=Red%20Fox
+    or   /api/species-info?id=123
+    Returns JSON with the columns of infos_especes.
+    """
+    name = request.GET.get("name")
+    sid  = request.GET.get("id")
+
+    if not name and not sid:
+        return JsonResponse({"detail": "name or id required"}, status=400)
+
+    sb = settings.SUPABASE_CLIENT
+    SPECIES_COL = 'Espèce'              # ← EXACT column name in Supabase
+
+    qry = sb.table("infos_especes").select("*").limit(1)
+    if sid:
+        qry = qry.eq("species_id", sid)
+    else:
+        # For case-insensitive match you can use .ilike()
+        # If the accent causes trouble, strip it or lowercase both sides.
+        qry = qry.ilike(SPECIES_COL, name)
+
+    res = qry.single().execute()
+    if not res.data:
+        return JsonResponse({"detail": "Not found"}, status=404)
+
+    return JsonResponse(res.data)

@@ -12,7 +12,7 @@
     <p style="color: red;">{{ error }}</p>
   {% else %}
     <!-- 1) A dropdown form to pick which table we want to see -->
-    <form method="GET" action="">
+    <form method="GET" action="{% url 'data_quality' %}">
       <label for="table_name">Choose a table:</label>
       <select id="table_name" name="table_name" onchange="this.form.submit()">
         <!-- We'll highlight whichever is currently requested -->

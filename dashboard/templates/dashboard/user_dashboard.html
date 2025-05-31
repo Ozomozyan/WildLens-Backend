@@ -1,0 +1,318 @@
+{# dashboard/templates/dashboard/user_dashboard.html #}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>My Wildlens Dashboard</title>
+
+  <!-- Tailwind (quick styling) -->
+  <link
+    href="https://cdn.jsdelivr.net/npm/tailwindcss/dist/tailwind.min.css"
+    rel="stylesheet"
+  />
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="p-6 bg-white">
+
+  <h1 class="text-2xl font-bold mb-4">My Wildlens Dashboard</h1>
+
+  <!-- ───────── prediction upload form ───────── -->
+  <form
+    id="predictForm"
+    enctype="multipart/form-data"
+    class="mb-6 p-4 border rounded bg-gray-50"
+  >
+    {% csrf_token %}
+    <input type="file" name="image" required class="block mb-2" />
+
+    <input
+      type="text"
+      name="location_text"
+      placeholder="Location (optional)"
+      class="border p-1 mb-2 w-full"
+    />
+    <input
+      type="text"
+      name="notes"
+      placeholder="Notes"
+      class="border p-1 mb-2 w-full"
+    />
+
+    <!-- hidden geo fields (autofilled in JS) -->
+    <input type="hidden" name="lat" />
+    <input type="hidden" name="lon" />
+
+    <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded">
+      Predict
+    </button>
+  </form>
+
+  <!-- ───────── charts ───────── -->
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+    <canvas id="pie"></canvas>
+    <canvas id="line"></canvas>
+  </div>
+
+  <!-- ───────── recent predictions table ───────── -->
+  <h2 class="text-xl font-semibold mb-2">Recent predictions</h2>
+  <table class="w-full text-sm border-collapse">
+    <thead>
+      <tr class="bg-gray-100">
+        <th class="p-2">Date</th>
+        <th class="p-2">Species</th>
+        <th class="p-2">Location</th>
+        <th class="p-2">Notes</th>
+      </tr>
+    </thead>
+    <tbody id="predictionsBody">
+      <!-- This single row will be replaced by JS once data is fetched -->
+      <tr>
+        <td colspan="4" class="p-4 text-center text-gray-500">
+          Loading…
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ───────── main script block ───────── -->
+  <script>
+    /* ---------- helpers to read cookies & token ---------- */
+    function getCookie(name) {
+      return document.cookie
+        .split("; ")
+        .find((r) => r.startsWith(name + "="))
+        ?.split("=")[1];
+    }
+
+    const supaJwt = decodeURIComponent(getCookie("supabase_token") || "");
+    if (!supaJwt) {
+      alert("⚠️  No supabase_token cookie found – please log in again.");
+    }
+
+    function getCsrfToken() {
+      return getCookie("csrftoken") || "";
+    }
+
+    /* ---------- geolocation into hidden inputs ---------- */
+    // This ensures `lat` and `lon` fields are populated before any submission.
+    navigator.geolocation?.getCurrentPosition(
+      (pos) => {
+        document.querySelector("input[name=lat]").value =
+          pos.coords.latitude;
+        document.querySelector("input[name=lon]").value =
+          pos.coords.longitude;
+      },
+      console.warn
+    );
+
+    /**********************************************/
+    /* Function to fetch all previous predictions */
+    /**********************************************/
+    async function fetchPredictions() {
+      const res = await fetch("/api/predictions", {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${supaJwt}`,
+        },
+        credentials: "include",
+      });
+      if (!res.ok) {
+        console.error("Failed to fetch previous predictions", res.status);
+        return [];
+      }
+      return await res.json();
+    }
+
+    /**********************************************/
+    /* Populate the <tbody> with fetched rows     */
+    /**********************************************/
+    function populateTable(predictions) {
+      const tbody = document.getElementById("predictionsBody");
+      tbody.innerHTML = ""; // remove the “Loading…” row
+
+      if (!predictions.length) {
+        const emptyRow = document.createElement("tr");
+        emptyRow.innerHTML = `
+          <td colspan="4" class="p-4 text-center text-gray-500">
+            No predictions yet.
+          </td>
+        `;
+        tbody.appendChild(emptyRow);
+        return;
+      }
+
+      for (const r of predictions) {
+        const dateOnly = r.created_at.slice(0, 10);
+        const loc = r.location_text || "–";
+        const notes = r.notes || "–";
+        const row = document.createElement("tr");
+        row.classList.add("border-t");
+        row.innerHTML = `
+          <td class="p-2">${dateOnly}</td>
+          <td class="p-2">${r.predicted_species}</td>
+          <td class="p-2">${loc}</td>
+          <td class="p-2">${notes}</td>
+        `;
+        tbody.appendChild(row);
+      }
+    }
+
+    /**********************************************/
+    /* Build pie chart data from predictions     */
+    /**********************************************/
+    function buildPieData(predictions) {
+      const counter = {};
+      for (const r of predictions) {
+        const label = r.predicted_species;
+        counter[label] = (counter[label] || 0) + 1;
+      }
+      return {
+        labels: Object.keys(counter),
+        values: Object.values(counter),
+      };
+    }
+
+    /**********************************************/
+    /* Build line chart data from predictions    */
+    /**********************************************/
+    function buildLineData(predictions) {
+      const daily = {};
+      for (const r of predictions) {
+        const day = r.created_at.slice(0, 10);
+        daily[day] = (daily[day] || 0) + 1;
+      }
+      const labels = Object.keys(daily).sort();
+      const values = labels.map((d) => daily[d]);
+      return { labels, values };
+    }
+
+    /**********************************************/
+    /* Once DOM is ready, fetch and render everything */
+    /**********************************************/
+    document.addEventListener("DOMContentLoaded", async () => {
+      // 1) Fetch previous predictions
+      const predictions = await fetchPredictions();
+
+      // 2) Populate the table
+      populateTable(predictions);
+
+      // 3) Render pie chart
+      const pieData = buildPieData(predictions);
+      new Chart(document.getElementById("pie"), {
+        type: "pie",
+        data: {
+          labels: pieData.labels,
+          datasets: [{ data: pieData.values }],
+        },
+      });
+
+      // 4) Render line chart
+      const lineData = buildLineData(predictions);
+      new Chart(document.getElementById("line"), {
+        type: "line",
+        data: {
+          labels: lineData.labels,
+          datasets: [
+            {
+              data: lineData.values,
+              tension: 0.3,
+            },
+          ],
+        },
+        options: {
+          scales: {
+            y: { beginAtZero: true },
+          },
+        },
+      });
+    });
+
+    /**********************************************/
+    /* Form submission & live update (unchanged)  */
+    /**********************************************/
+    const form = document.getElementById("predictForm");
+    const tbody = document.getElementById("predictionsBody");
+    form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+
+      // Build FormData (with image, location_text, notes, lat, lon)
+      const fd = new FormData(form);
+
+      // POST to /api/predictions
+      const res = await fetch("/api/predictions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${supaJwt}`,
+          "X-CSRFToken": getCsrfToken(),
+        },
+        credentials: "include",
+        body: fd,
+      });
+
+      if (!res.ok) {
+        const msg = await res.text();
+        alert(`Prediction failed (${res.status}): ${msg}`);
+        return;
+      }
+
+      const { prediction } = await res.json(); // species string
+      const today = new Date().toISOString().slice(0, 10);
+
+      // 1) Insert newly created row at top of table
+      const newRow = document.createElement("tr");
+      newRow.classList.add("border-t");
+      newRow.innerHTML = `
+        <td class="p-2">${today}</td>
+        <td class="p-2">${prediction}</td>
+        <td class="p-2">${fd.get("location_text") || "–"}</td>
+        <td class="p-2">${fd.get("notes") || "–"}</td>
+      `;
+      // If the table was empty, clear the “No predictions yet” row
+      if (
+        tbody.children.length === 1 &&
+        tbody.children[0].textContent.includes("No predictions yet")
+      ) {
+        tbody.innerHTML = "";
+      }
+      tbody.insertBefore(newRow, tbody.firstChild);
+
+      // 2) Update pie chart
+      const pieChart = Chart.getChart("pie");
+      const pieLabels = pieChart.data.labels;
+      const pieValues = pieChart.data.datasets[0].data;
+      const existingPieIndex = pieLabels.indexOf(prediction);
+      if (existingPieIndex === -1) {
+        pieLabels.push(prediction);
+        pieValues.push(1);
+      } else {
+        pieValues[existingPieIndex] += 1;
+      }
+      pieChart.update();
+
+      // 3) Update line chart
+      const lineChart = Chart.getChart("line");
+      const lineLabels = lineChart.data.labels;
+      const lineValues = lineChart.data.datasets[0].data;
+      const lineIndex = lineLabels.indexOf(today);
+      if (lineIndex === -1) {
+        lineLabels.push(today);
+        lineValues.push(1);
+      } else {
+        lineValues[lineIndex] += 1;
+      }
+      lineChart.update();
+
+      // 4) Reset form (but re‐populate lat/lon)
+      form.reset();
+      navigator.geolocation?.getCurrentPosition((pos) => {
+        document.querySelector("input[name=lat]").value =
+          pos.coords.latitude;
+        document.querySelector("input[name=lon]").value =
+          pos.coords.longitude;
+      });
+    });
+  </script>
+</body>
+</html>
