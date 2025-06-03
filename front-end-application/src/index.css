@@ -1,0 +1,11 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+/* brand helpers */
+.btn-primary {
+  @apply inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2
+         font-medium text-white transition hover:bg-primary/90;
+}
+.card     { @apply rounded-xl bg-white shadow p-4; }
