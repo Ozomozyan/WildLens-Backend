@@ -10,6 +10,7 @@ from django.views.decorators.csrf import csrf_exempt
 from wildlens_backend.local_runner import start_training
 from wildlens_backend.auth_decorators import supabase_login_required
 import json, datetime
+from django.conf import settings
 from django.views.decorators.cache import cache_page
 from django.views.decorators.http import require_GET
 from wildlens_backend.auth_decorators import supabase_login_required
@@ -261,7 +262,7 @@ def data_quality_dashboard(request):
 
     try:
         # 2) Fetch ALL logs. We'll filter in Python (or do a second query if you prefer).
-        res = settings.SUPABASE_CLIENT.table("data_quality_log") \
+        res = client_for_request(request).table("data_quality_log") \
             .select("*") \
             .order("execution_time", desc=True) \
             .execute()
@@ -673,7 +674,7 @@ def user_predictions_map(request):
     """
     try:
         res = (
-            settings.SUPABASE_CLIENT
+            client_for_request(request) 
             .table("prediction_locations_v")
             .select("species_name,lat,lon")
             .execute()

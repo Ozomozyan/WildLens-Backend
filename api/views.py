@@ -136,7 +136,6 @@ class PredictionViewSet(viewsets.ViewSet):
         # 5) Fetch one matching row from infos_especes (limit 1, never .single())
         info_res = (
             sb.table("infos_especes")
-            .table("infos_especes")
             .select("*")
             .ilike("Espèce", name)
             .limit(1)
