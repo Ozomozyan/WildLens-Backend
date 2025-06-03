@@ -3,19 +3,19 @@
 import os, jwt
 import requests
 from django.shortcuts import render, redirect
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse, JsonResponse, StreamingHttpResponse
 from wildlens_backend.supabase_util import client_for_request
 from wildlens_backend.auth_decorators import supabase_admin_required
 from django.views.decorators.csrf import csrf_exempt
 from wildlens_backend.local_runner import start_training
 from wildlens_backend.auth_decorators import supabase_login_required
-import json, datetime
+import json, io, os, re, time
 from django.conf import settings
 from django.views.decorators.cache import cache_page
 from django.views.decorators.http import require_GET
 from wildlens_backend.auth_decorators import supabase_login_required
 from django.http import JsonResponse, HttpResponse, HttpResponseBadRequest
-from collections import Counter
+from collections import Counter, deque
 
 import json
 from collections import Counter
@@ -24,6 +24,7 @@ from collections import Counter
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
+LOG_FILE = os.getenv("GUNICORN_LOG", "/app/logs/gunicorn.log")
 
 # ─── GitHub / workflow settings ────────────────────────────────────────────
 GITHUB_TOKEN  = os.getenv("GITHUB_TOKEN", None)           # same var you already use
@@ -853,3 +854,47 @@ def species_info_api(request):
         return JsonResponse({"detail": "Not found"}, status=404)
 
     return JsonResponse(res.data)
+
+
+
+
+@api_view(["GET"])
+@supabase_admin_required
+def logs_api(request):
+    """
+    GET /admin-dashboard/server-logs/?lines=300  (default 200)
+        ?follow=1 → server-sent plain-text stream
+
+    Always returns *plain text*, never JSON.
+    """
+    lines  = int(request.GET.get("lines", 200))
+    follow = request.GET.get("follow") in ("1", "true")
+
+    if not os.path.isfile(LOG_FILE):
+        return Response(
+            f"⚠️ log file {LOG_FILE} not found",
+            status=500, content_type="text/plain"
+        )
+
+    # helper: last N lines without reading the whole file
+    def tail(fp, n):
+        dq = deque(fp, maxlen=n)
+        return "".join(dq)
+
+    # ── follow mode ─────────────────────────────────────────────
+    if follow:
+        def stream():
+            with open(LOG_FILE, "r") as fp:
+                fp.seek(0, os.SEEK_END)          # jump to EOF
+                while True:
+                    chunk = fp.readline()
+                    if chunk:
+                        yield chunk
+                    else:
+                        time.sleep(0.3)
+        return StreamingHttpResponse(stream(), content_type="text/plain")
+
+    # ── single-shot ────────────────────────────────────────────
+    with open(LOG_FILE, "r") as fp:
+        payload = tail(fp, lines)
+    return Response(payload, content_type="text/plain")

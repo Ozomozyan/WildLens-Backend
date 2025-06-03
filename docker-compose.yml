@@ -20,6 +20,7 @@ services:
 
   backend:
     build: .
+    shm_size: "1g" 
     env_file: .env
     depends_on:
       ai:
@@ -28,8 +29,14 @@ services:
       - "8000:8000"
     environment:
       - AI_SERVICE_URL=http://ai:8001/predict
+      - GUNICORN_CMD_ARGS=\
+          --access-logfile /app/logs/gunicorn.log \
+          --error-logfile  /app/logs/gunicorn.log \
+          --capture-output \
+          --log-level info          # or “debug” if you need more
     volumes:
       - ./:/app
+      - ./logs:/app/logs  
       - static_data:/app/static
     networks:
       - wildlens

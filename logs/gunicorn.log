@@ -1,0 +1,36 @@
+[2025-06-03 14:50:34 +0000] [1] [INFO] Starting gunicorn 21.2.0
+[2025-06-03 14:50:34 +0000] [1] [INFO] Listening at: http://0.0.0.0:8000 (1)
+[2025-06-03 14:50:34 +0000] [1] [INFO] Using worker: sync
+[2025-06-03 14:50:34 +0000] [7] [INFO] Booting worker with pid: 7
+[2025-06-03 14:50:34 +0000] [8] [INFO] Booting worker with pid: 8
+[2025-06-03 14:50:34 +0000] [9] [INFO] Booting worker with pid: 9
+[2025-06-03 14:50:34 +0000] [10] [INFO] Booting worker with pid: 10
+172.19.0.1 - - [03/Jun/2025:14:51:01 +0000] "OPTIONS /login/ HTTP/1.1" 200 0 "http://localhost:5173/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/137.0.0.0"
+172.19.0.1 - - [03/Jun/2025:14:51:06 +0000] "POST /login/ HTTP/1.1" 200 827 "http://localhost:5173/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/137.0.0.0"
+172.19.0.1 - - [03/Jun/2025:14:51:06 +0000] "OPTIONS /admin-dashboard/data/ HTTP/1.1" 200 0 "http://localhost:5173/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/137.0.0.0"
+172.19.0.1 - - [03/Jun/2025:14:51:06 +0000] "OPTIONS /admin-dashboard/data/ HTTP/1.1" 200 0 "http://localhost:5173/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/137.0.0.0"
+172.19.0.1 - - [03/Jun/2025:14:51:06 +0000] "GET /admin-dashboard/data/ HTTP/1.1" 401 26 "http://localhost:5173/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/137.0.0.0"
+172.19.0.1 - - [03/Jun/2025:14:51:06 +0000] "GET /admin-dashboard/data/ HTTP/1.1" 401 26 "http://localhost:5173/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/137.0.0.0"
+172.19.0.1 - - [03/Jun/2025:14:52:31 +0000] "POST /login/ HTTP/1.1" 200 827 "http://localhost:5173/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/137.0.0.0"
+172.19.0.1 - - [03/Jun/2025:14:52:31 +0000] "GET /admin-dashboard/data/ HTTP/1.1" 200 5381 "http://localhost:5173/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/137.0.0.0"
+172.19.0.1 - - [03/Jun/2025:14:52:36 +0000] "GET /admin-dashboard/data/ HTTP/1.1" 200 5381 "http://localhost:5173/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/137.0.0.0"
+172.19.0.1 - - [03/Jun/2025:14:54:33 +0000] "GET /admin-dashboard/data/ HTTP/1.1" 200 5381 "http://localhost:5173/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/137.0.0.0"
+172.19.0.1 - - [03/Jun/2025:14:54:34 +0000] "GET /admin-dashboard/data/ HTTP/1.1" 200 5381 "http://localhost:5173/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/137.0.0.0"
+172.19.0.1 - - [03/Jun/2025:14:54:37 +0000] "GET /admin-dashboard/data/ HTTP/1.1" 200 5381 "http://localhost:5173/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/137.0.0.0"
+172.19.0.1 - - [03/Jun/2025:14:54:38 +0000] "GET /admin-dashboard/data/ HTTP/1.1" 200 5381 "http://localhost:5173/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/137.0.0.0"
+172.19.0.1 - - [03/Jun/2025:14:54:41 +0000] "OPTIONS /admin-dashboard/server-logs/?lines=400 HTTP/1.1" 200 0 "http://localhost:5173/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/137.0.0.0"
+172.19.0.1 - - [03/Jun/2025:14:54:41 +0000] "GET /admin-dashboard/server-logs/?lines=400 HTTP/1.1" 200 3960 "http://localhost:5173/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/137.0.0.0"
+172.19.0.1 - - [03/Jun/2025:14:54:41 +0000] "OPTIONS /admin-dashboard/server-logs/?lines=400 HTTP/1.1" 200 0 "http://localhost:5173/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/137.0.0.0"
+172.19.0.1 - - [03/Jun/2025:14:54:41 +0000] "GET /admin-dashboard/server-logs/?lines=400 HTTP/1.1" 200 4497 "http://localhost:5173/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/137.0.0.0"
+172.19.0.1 - - [03/Jun/2025:14:55:16 +0000] "GET /admin-dashboard/server-logs/?lines=400 HTTP/1.1" 200 4765 "http://localhost:5173/" "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36 Edg/137.0.0.0"
+172.19.0.1 - - [03/Jun/2025:14:55:16 +0000] "GET /admin-dashboard/server-logs/?lines=400 HTTP/1.1" 200 5053 "http://localhost:5173/" "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36 Edg/137.0.0.0"
+172.19.0.1 - - [03/Jun/2025:14:57:06 +0000] "GET /admin-dashboard/server-logs/?lines=400 HTTP/1.1" 200 5341 "http://localhost:5173/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/137.0.0.0"
+172.19.0.1 - - [03/Jun/2025:14:57:06 +0000] "GET /admin-dashboard/server-logs/?lines=400 HTTP/1.1" 200 5609 "http://localhost:5173/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/137.0.0.0"
+172.19.0.1 - - [03/Jun/2025:14:58:00 +0000] "GET /admin-dashboard/server-logs/?lines=400 HTTP/1.1" 200 5877 "http://localhost:5173/" "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36 Edg/137.0.0.0"
+172.19.0.1 - - [03/Jun/2025:14:58:00 +0000] "GET /admin-dashboard/server-logs/?lines=400 HTTP/1.1" 200 6165 "http://localhost:5173/" "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36 Edg/137.0.0.0"
+[2025-06-03 15:00:18 +0000] [1] [INFO] Handling signal: term
+[2025-06-03 15:00:18 +0000] [7] [INFO] Worker exiting (pid: 7)
+[2025-06-03 15:00:18 +0000] [8] [INFO] Worker exiting (pid: 8)
+[2025-06-03 15:00:18 +0000] [9] [INFO] Worker exiting (pid: 9)
+[2025-06-03 15:00:18 +0000] [10] [INFO] Worker exiting (pid: 10)
+[2025-06-03 15:00:25 +0000] [1] [INFO] Shutting down: Master

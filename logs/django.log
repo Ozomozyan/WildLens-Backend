@@ -1,0 +1,2 @@
+2025-06-03 15:34:05,724  INFO      httpx  HTTP Request: GET https://bdcnqrfvlvpjghbervkb.supabase.co/rest/v1/species_summary_v?select=%2A "HTTP/2 200 OK"
+2025-06-03 15:34:10,335  INFO      httpx  HTTP Request: GET https://bdcnqrfvlvpjghbervkb.supabase.co/rest/v1/species_summary_v?select=%2A "HTTP/2 200 OK"
