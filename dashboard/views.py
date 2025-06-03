@@ -15,6 +15,7 @@ from django.views.decorators.cache import cache_page
 from django.views.decorators.http import require_GET
 from wildlens_backend.auth_decorators import supabase_login_required
 from django.http import JsonResponse, HttpResponse, HttpResponseBadRequest
+from collections import Counter
 
 import json
 from collections import Counter
@@ -350,6 +351,58 @@ def data_quality_dashboard(request):
     return render(request, "dashboard/data_quality_dashboard.html", context)
 
 
+# ─── API: /admin/data-quality-data/ ────────────────────────────────
+@api_view(["GET"])
+@supabase_admin_required
+def data_quality_api(request):
+    """
+    JSON twin of data_quality_dashboard().
+    GET /admin/data-quality-data/?table_name=infos_especes
+    """
+    table_name = request.GET.get("table_name", "infos_especes")
+
+    # Pull all logs, same query as before
+    res = client_for_request(request).table("data_quality_log") \
+          .select("*").order("execution_time", desc=True).execute()
+    logs = res.data or []
+
+    if not logs:
+        return Response({"latest_rows": [], "times": []})   # empty payload
+
+    # ─── latest rows (one per table) ───────────────────────
+    latest_map = {}
+    for row in logs:
+        tbl = row["table_name"]
+        latest_map.setdefault(tbl, {
+            "table_name": tbl,
+            "execution_time": row["execution_time"],
+            "tests":   row["test_results"],
+            "error_description": row["error_description"],
+        })
+
+    latest_rows = list(latest_map.values())
+
+    # ─── trend vectors for the requested table ─────────────
+    times, exa, per, exa2 = [], [], [], []
+    for row in reversed(logs):                # ascending time
+        if row["table_name"] == table_name:
+            try:
+                vec = eval(row["test_results"])     # [Exh, Per, Exa]
+            except Exception:
+                vec = []
+            if len(vec) == 3:
+                times.append(row["execution_time"])
+                exa.append(vec[0]);  per.append(vec[1]);  exa2.append(vec[2])
+
+    return Response({
+        "latest_rows": latest_rows,
+        "times":       times,
+        "exhaust":     exa,
+        "pertinence":  per,
+        "exactitude":  exa2,
+    })
+
+
 @csrf_exempt
 def run_etl_via_github(request):
     """
@@ -407,6 +460,79 @@ def run_training(request):
     return Response({"detail": "Training job started"},
                     status=202)             # Accepted
     
+    
+    
+
+# ─── API: /admin-dashboard/stats-api/ ────────────────────────────────
+
+@api_view(["GET"])
+@supabase_admin_required          # ← only admins can hit this route
+def admin_stats_api(request):
+    """
+    Pure-JSON version of admin_dashboard().
+    React calls this to obtain all the numbers for charts + table.
+    """
+    # 1) Pull every row from the materialised view
+    res_obj = (
+        settings.SUPABASE_CLIENT
+        .table("species_summary_v")
+        .select("*")
+        .execute()
+    )
+    data = res_obj.data or []
+    if not data:
+        return Response({"detail": "No data"}, status=404)
+
+    # 2) Aggregate exactly the same way the HTML template did
+    species_map   = {}
+    family_counter, region_counter = Counter(), Counter()
+
+    for row in data:
+        sid = row["species_id"]
+        bucket = row.get("region_bucket") or row.get("region") or ""
+
+        species_map.setdefault(sid, {
+            "species_id":  sid,
+            "species_name":row["species_name"],
+            "family":      row["family"],
+            "taille":      row["taille"],
+            "description": row["description"],
+            "total_images":row["total_images"],
+            "completeness_percentage": row["completeness_percentage"],
+            "region_set":  set()
+        })
+
+        if bucket:
+            species_map[sid]["region_set"].add(bucket)
+
+    # 3) Flatten for the table and chart arrays
+    table_rows      = []
+    images_count    = []
+    completeness_pc = []
+
+    for info in species_map.values():
+        table_rows.append({
+            **info,
+            "region": ", ".join(sorted(info["region_set"])),
+        })
+        images_count.append(info["total_images"])
+        completeness_pc.append(info["completeness_percentage"])
+
+        family_counter[info["family"]] += 1
+        for r in info["region_set"]:
+            region_counter[r] += 1
+
+    # 4) Ship JSON
+    return Response({
+        "rows":            table_rows,
+        "species_names":   [r["species_name"] for r in table_rows],
+        "images_count":    images_count,
+        "family_labels":   list(family_counter.keys()),
+        "family_values":   list(family_counter.values()),
+        "completeness":    completeness_pc,
+        "region_labels":   list(region_counter.keys()),
+        "region_values":   list(region_counter.values()),
+    })
     
     
     
