@@ -38,8 +38,11 @@ SECRET_KEY = 'django-insecure-0-ph18yv#qyiq#d34!*y)!m+j6=o7#0j5ib3gqg*1$u-_34mw3
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ["*"]
 
+CSRF_TRUSTED_ORIGINS = [
+    'http://localhost:5173',
+]
 
 # Application definition
 
@@ -57,15 +60,37 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
-    'django.middleware.security.SecurityMiddleware',
-    'django.contrib.sessions.middleware.SessionMiddleware',
-    'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
-    'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'django.contrib.messages.middleware.MessageMiddleware',
-    'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'wildlens_backend.middleware.SupabaseAuthMiddleware',  # custom
-    'corsheaders.middleware.CorsMiddleware',  # CORS middleware
+    "django.middleware.security.SecurityMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "wildlens_backend.middleware.SupabaseAuthMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
+    # Standard Django stack
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
+
+    # Optional: WhiteNoise for static files (PROD only)
+    "whitenoise.middleware.WhiteNoiseMiddleware",
+]
+
+
+# While debugging, let ANY origin talk to Django:
+CORS_ALLOW_ALL_ORIGINS = True
+# We still want cookies, so allow credentials:
+CORS_ALLOW_CREDENTIALS = True
+
+# Allow only these origins to make cross-origin requests:
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:3000",
 ]
 
 AI_SERVICE_URL = os.getenv("AI_SERVICE_URL", "http://ai:8001/predict")
@@ -137,6 +162,12 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 
 STATIC_URL = 'static/'
+# Static files (CSS, JavaScript, Images)
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / "staticfiles"
+
+# Whitenoise: compress static files & support caching
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
@@ -164,6 +195,38 @@ SIMPLE_JWT = {
     "USER_ID_CLAIM": "sub",
     "JTI_CLAIM": None, 
 }
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+
+    "formatters": {
+        "simple": {
+            "format": "%(asctime)s  %(levelname)s  %(name)s  %(message)s"
+        },
+    },
+
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "simple",
+        },
+    },
+
+    "loggers": {
+        # Our middleware + decorators
+        "supabase": {
+            "handlers": ["console"],
+            "level": "DEBUG",      # change to INFO in prod
+        },
+        # You can also see Django’s auth flow if you want:
+        "django.request": {
+            "handlers": ["console"],
+            "level": "INFO",
+        },
+    },
+}
+
 
 
 SUPABASE_CLIENT: Client = create_client(SUPABASE_URL, SUPABASE_KEY)

@@ -4,7 +4,7 @@ import os, jwt
 import requests
 from django.shortcuts import render, redirect
 from django.http import HttpResponse, JsonResponse
-from django.conf import settings
+from wildlens_backend.supabase_util import client_for_request
 from wildlens_backend.auth_decorators import supabase_admin_required
 from django.views.decorators.csrf import csrf_exempt
 from wildlens_backend.local_runner import start_training
@@ -13,7 +13,7 @@ import json, datetime
 from django.views.decorators.cache import cache_page
 from django.views.decorators.http import require_GET
 from wildlens_backend.auth_decorators import supabase_login_required
-
+from django.http import JsonResponse, HttpResponse, HttpResponseBadRequest
 
 import json
 from collections import Counter
@@ -29,53 +29,77 @@ GITHUB_OWNER  = os.getenv("GITHUB_OWNER", "Ozomozyan")    # change if needed
 GITHUB_REPO   = os.getenv("GITHUB_REPO",  "MSPR_ETL")  # this project’s repo
 TRAIN_WORKFLOW = os.getenv("TRAIN_WORKFLOW", "MODEL_TRAIN.yml")
 
-
+@csrf_exempt
 def login_view(request):
-    if request.method == "GET":
-        return render(request, "accounts/login.html")
+    """
+    Option A: A pure-JSON login endpoint for React. 
+    Expects POST {"email": "...", "password": "..."} and returns:
+      { "token": "<supabase_jwt>", "user_id": "<uid>", "role": "admin"|"user" }
+    Saves token and uid in request.session so that @supabase_login_required sees it.
+    """
 
-    email    = request.POST["email"]
-    password = request.POST["password"]
+    # Only allow POST with JSON
+    if request.method != "POST":
+        return HttpResponseBadRequest("Only POST with JSON body is allowed.")
 
-    # 1) Exchange creds for a Supabase JWT
+    # Parse JSON from request.body
+    try:
+        payload = json.loads(request.body.decode("utf-8"))
+    except (ValueError, TypeError):
+        return HttpResponseBadRequest("Invalid JSON.")
+
+    email = payload.get("email")
+    password = payload.get("password")
+    if not email or not password:
+        return HttpResponseBadRequest("Email and password are required.")
+
+    # 1) Exchange credentials for a Supabase JWT
     endpoint = f"{os.getenv('SUPABASE_URL')}/auth/v1/token?grant_type=password"
-    headers  = {
+    headers = {
         "apikey":       os.getenv("SUPABASE_KEY", ""),
         "Content-Type": "application/json",
     }
-    resp = requests.post(endpoint, json={"email": email, "password": password}, headers=headers)
+    resp = requests.post(
+        endpoint,
+        json={"email": email, "password": password},
+        headers=headers
+    )
     if resp.status_code != 200:
-        return HttpResponse("Login failed. Check your credentials.", status=401)
+        return JsonResponse(
+            {"detail": "Login failed. Check your credentials."},
+            status=401
+        )
 
     token = resp.json().get("access_token")
     if not token:
-        return HttpResponse("No token returned by Supabase.", status=401)
+        return JsonResponse(
+            {"detail": "No token returned by Supabase."},
+            status=401
+        )
 
-    # 2) Decode the JWT, inspect app_metadata.role
+    # 2) Decode the JWT (without verifying signature) to inspect app_metadata.role
     try:
         claims = jwt.decode(token, options={"verify_signature": False})
     except jwt.PyJWTError:
-        return HttpResponse("Could not decode Supabase token.", status=500)
+        return JsonResponse(
+            {"detail": "Could not decode Supabase token."},
+            status=500
+        )
 
     app_meta = claims.get("app_metadata", {}) or {}
-    is_admin = app_meta.get("role") == "admin"
+    is_admin = (app_meta.get("role") == "admin")
 
-    # 3) Store in session for later use
+    # 3) Store in Django session so @supabase_login_required can work later
     request.session["supabase_token"] = token
-    request.session["supabase_uid"]   = claims["sub"]
+    request.session["supabase_uid"]   = claims.get("sub")
+    request.session.save()  # force Django to issue a sessionid cookie
 
-    # 3b) ALSO set a non-HttpOnly cookie so our JS can read it
-    redirect_to = "/admin-dashboard/" if is_admin else "/user-dashboard/"
-    response = redirect(redirect_to)
-    response.set_cookie(
-        "supabase_token",
-        token,
-        httponly=False,    # allow JS access
-        samesite="Lax",    # adjust as needed
-        # secure=True      # uncomment if you’re on HTTPS
-    )
-
-    return response
+    # 4) Return JSON so React can handle routing
+    return JsonResponse({
+        "token": token,
+        "user_id": claims.get("sub"),
+        "role": "admin" if is_admin else "user"
+    })
 
 
 @supabase_admin_required
@@ -396,11 +420,11 @@ def user_dashboard(request):
     """
 
     # (1) Who am I?
-    user_id = request.session.get("supabase_uid")          # your middleware sets this
+    user_id = request.supabase_user["sub"]        # your middleware sets this
     if not user_id:
         return redirect("/login/")
 
-    sb = settings.SUPABASE_CLIENT
+    sb = client_for_request(request)
     try:
         res = (
             sb.table("predictions")
@@ -444,6 +468,76 @@ def user_dashboard(request):
     }
     return render(request, "dashboard/user_dashboard.html", context)
 
+@csrf_exempt
+@api_view(["GET"])
+def user_stats_api(request):
+    """
+    JSON endpoint for React to fetch exactly the same data
+    your old user_dashboard template used to render.
+    Returns:
+      {
+        "table_rows": [...],           # last 25 predictions
+        "pie_labels": [...],
+        "pie_values": [...],
+        "line_labels": [...],
+        "line_values": [...],
+      }
+    """
+
+    # 1) Ensure the middleware decoded a valid Supabase JWT
+    if not hasattr(request, "supabase_user"):
+        return JsonResponse({"detail": "Not authenticated."}, status=401)
+
+    # 2) Pull the user ID ("sub" claim) directly from the verified token
+    user_id = request.supabase_user.get("sub")
+    if not user_id:
+        return JsonResponse({"detail": "Not authenticated."}, status=401)
+
+    # 3) Use the Supabase client from settings
+    sb = client_for_request(request)
+
+    try:
+        res = (
+            sb.table("predictions")
+              .select("*")
+              .eq("user_id", user_id)
+              .order("created_at", desc=True)
+              .limit(200)
+              .execute()
+        )
+        rows = res.data or []
+    except Exception as e:
+        return JsonResponse({"detail": f"Supabase query failed: {e}"}, status=500)
+
+    # Build the “table_rows” (latest 25)
+    table_rows = rows[:25]
+
+    # Build the pie‐chart data (species distribution)
+    species_counter = {}
+    for r in rows:
+        label = r.get("predicted_species")
+        if label:
+            species_counter[label] = species_counter.get(label, 0) + 1
+    pie_labels = list(species_counter.keys())
+    pie_values = list(species_counter.values())
+
+    # Build the line‐chart data (# predictions per day)
+    daily_counter = {}
+    for r in rows:
+        created_at = r.get("created_at", "")
+        day = created_at[:10]  # “YYYY-MM-DD”
+        if day:
+            daily_counter[day] = daily_counter.get(day, 0) + 1
+    line_labels = sorted(daily_counter.keys())
+    line_values = [daily_counter[d] for d in line_labels]
+
+    return JsonResponse({
+        "table_rows": table_rows,
+        "pie_labels": pie_labels,
+        "pie_values": pie_values,
+        "line_labels": line_labels,
+        "line_values": line_values,
+    })
 
 # ──────────────────────────────────────────────────────────
 @supabase_login_required
@@ -454,7 +548,7 @@ def user_species_summary(request):
     """
     try:
         res_obj = (
-            settings.SUPABASE_CLIENT
+            client_for_request(request)
             .table("species_summary_v")
             .select("*")
             .execute()
@@ -515,7 +609,61 @@ def user_species_summary(request):
     }
     return render(request, "dashboard/user_species_summary.html", context)
 
+@api_view(["GET"])
+@supabase_login_required
+def species_summary_api(request):
+    """
+    JSON version of the species-summary endpoint.
+    GET /user-dashboard/species-summary-data/
+    Returns:
+      {
+        "rows":            [...],
+        "family_labels":   [...],
+        "family_values":   [...],
+        "region_labels":   [...],
+        "region_values":   [...]
+      }
+    """
+    # ----- fetch data exactly like the template view -----
+    res = (
+        client_for_request(request)
+        .table("species_summary_v")
+        .select("*")
+        .execute()
+    )
+    data = res.data or []
 
+    # ----- dedupe + aggregation (identical logic) --------
+    species_map, family_counter, region_counter = {}, Counter(), Counter()
+    for row in data:
+        sid = row["species_id"]
+        bucket = row.get("region_bucket") or row.get("region") or ""
+        species_map.setdefault(sid, {
+            "species_id": sid,
+            "species_name": row["species_name"],
+            "family": row["family"],
+            "region_set": set()
+        })
+        if bucket:
+            species_map[sid]["region_set"].add(bucket)
+
+    rows = []
+    for info in species_map.values():
+        rows.append({
+            **info,
+            "region": ", ".join(sorted(info["region_set"]))
+        })
+        family_counter[info["family"]] += 1
+        for r in info["region_set"]:
+            region_counter[r] += 1
+
+    return Response({
+        "rows":            rows,
+        "family_labels":   list(family_counter.keys()),
+        "family_values":   list(family_counter.values()),
+        "region_labels":   list(region_counter.keys()),
+        "region_values":   list(region_counter.values()),
+    })
 
 @supabase_login_required
 @cache_page(60)              # 1-minute cache; map data doesn’t change often
@@ -562,7 +710,7 @@ def species_info_api(request):
     if not name and not sid:
         return JsonResponse({"detail": "name or id required"}, status=400)
 
-    sb = settings.SUPABASE_CLIENT
+    sb = client_for_request(request) 
     SPECIES_COL = 'Espèce'              # ← EXACT column name in Supabase
 
     qry = sb.table("infos_especes").select("*").limit(1)

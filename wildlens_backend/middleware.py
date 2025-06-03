@@ -1,8 +1,11 @@
+# mysite/middleware.py
 import os
-import jwt
+import jwt, logging
 from django.http import JsonResponse
 
-SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "CHANGE_ME")
+log = logging.getLogger("supabase")
+
+SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")    # copy from Supabase → Settings → API
 
 class SupabaseAuthMiddleware:
     def __init__(self, get_response):
@@ -11,25 +14,40 @@ class SupabaseAuthMiddleware:
     def __call__(self, request):
         token = None
 
-        # 1) Check if there's an Authorization header
-        auth_header = request.META.get('HTTP_AUTHORIZATION', '')
-        if auth_header.startswith('Bearer '):
-            token = auth_header.split('Bearer ')[1]
+        auth_header = request.META.get("HTTP_AUTHORIZATION", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header.split(" ", 1)[1]
+            log.debug("Found Bearer header")
 
-        # 2) If no header, check the session for a token
-        if not token and hasattr(request, 'session'):
-            token = request.session.get('supabase_token')
+        if not token:
+            token = request.session.get("supabase_token")
+        auth_header = request.META.get("HTTP_AUTHORIZATION", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header.split(" ", 1)[1]
+        else:
+            token = None
+            if token:
+                log.debug("Using token from session")
 
-        if token:
+        if not token:
+            log.debug("❌ No token in header *or* session")
+        else:
             try:
-                # Verify the token
-                payload = jwt.decode(token, SUPABASE_JWT_SECRET, audience="authenticated", algorithms=['HS256'])
+                payload = jwt.decode(
+                    token,
+                    SUPABASE_JWT_SECRET,
+                    algorithms=["HS256"],
+                    audience="authenticated",
+                )
                 request.supabase_user = payload
+                log.debug("✅ Token OK – sub=%s  role=%s",
+                          payload.get("sub"),
+                          payload.get("app_metadata", {}).get("role"))
             except jwt.ExpiredSignatureError:
+                log.warning("❌ Token expired")
                 return JsonResponse({"error": "Token expired"}, status=401)
-            except jwt.InvalidTokenError:
+            except jwt.InvalidTokenError as e:
+                log.warning("❌ Invalid token: %s", e)
                 return JsonResponse({"error": "Invalid token"}, status=401)
 
-        # proceed with request
-        response = self.get_response(request)
-        return response
+        return self.get_response(request)

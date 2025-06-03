@@ -3,8 +3,12 @@ FROM python:3.12-slim AS builder
 WORKDIR /app
 COPY requirements.txt .
 COPY ai/requirements.txt ./ai-req.txt
-RUN pip install --prefix=/install -r requirements.txt && \
-    pip install --prefix=/install -r ai-req.txt
+RUN pip install --no-cache-dir --retries 10 --timeout 1000 \
+        --prefix=/install \
+        -r requirements.txt \
+    && pip install --no-cache-dir --retries 10 --timeout 1000 \
+        --prefix=/install \
+        -r ai-req.txt
 
 # ---------- runtime ----------
 FROM python:3.12-slim

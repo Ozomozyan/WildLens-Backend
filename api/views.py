@@ -9,7 +9,6 @@ from wildlens_backend.auth_decorators import supabase_login_required
 from rest_framework import viewsets, status, permissions
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser
-from wildlens_backend.settings import SUPABASE_CLIENT  # 🔸 create a helper (see below)
 from ai.predict import predict                     # 🔸 already in repo
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -22,18 +21,8 @@ from collections import Counter
 from django.shortcuts import render, redirect
 from django.conf import settings
 from wildlens_backend.auth_decorators import supabase_login_required
+from wildlens_backend.supabase_util import client_for_request
 
-
-
-def _sb_for(request):
-    """
-    Return a Supabase client whose PostgREST layer is authenticated
-    with the JWT that arrived on this HTTP request.
-    """
-    jwt = request.headers.get("Authorization", "").split(" ", 1)[-1]
-    # clone-like behaviour: postgrest.auth() mutates in-place but is cheap
-    SUPABASE_CLIENT.postgrest.auth(jwt)
-    return SUPABASE_CLIENT
 
 @method_decorator(csrf_exempt, name="dispatch")
 class PredictView(APIView):
@@ -72,21 +61,21 @@ class PredictionViewSet(viewsets.ViewSet):
     parser_classes = [MultiPartParser]
 
     def list(self, request):
-        sb = _sb_for(request)
+        sb = client_for_request(request)  
         resp = sb.table("predictions")\
                        .select("*")\
-                       .eq("user_id", request.user.username)\
+                       .eq("user_id", request.supabase_user["sub"])\
                        .order("created_at", desc=True)\
                        .limit(50)\
                        .execute()
         return Response(resp.data)
 
     def retrieve(self, request, pk=None):
-        sb = _sb_for(request)
+        sb = client_for_request(request) 
         resp = sb.table("predictions")\
                        .select("*")\
                        .eq("id", pk)\
-                       .eq("user_id", request.user.username)\
+                       .eq("user_id", request.supabase_user["sub"])\
                        .single()\
                        .execute()
         if resp.data:
@@ -129,21 +118,24 @@ class PredictionViewSet(viewsets.ViewSet):
                 {"detail": "Confidence too low (under 3 %)—please take another picture."},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        sb = client_for_request(request)            # NEW
+
+        uid = request.supabase_user["sub"]          # safer than request.user.username    
 
         # 4) Insert row in Supabase, using the formatted string
         insert_payload = {
-            "user_id": request.user.username,
+            "user_id": uid,
             "predicted_species": species,
             "location_text": request.data.get("location_text"),
             "latitude": request.data.get("lat"),
             "longitude": request.data.get("lon"),
             "notes": request.data.get("notes"),
         }
-        _sb_for(request).table("predictions").insert(insert_payload).execute()
+        sb.table("predictions").insert(insert_payload).execute()
 
         # 5) Fetch one matching row from infos_especes (limit 1, never .single())
         info_res = (
-            _sb_for(request)
+            sb.table("infos_especes")
             .table("infos_especes")
             .select("*")
             .ilike("Espèce", name)
@@ -162,12 +154,8 @@ class PredictionViewSet(viewsets.ViewSet):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def prediction_locations(request):
-    res = (
-        settings.SUPABASE_CLIENT
-        .table("prediction_locations_v")
-        .select("*")
-        .execute()
-    )
+    sb = client_for_request(request)
+    res = sb.table("prediction_locations_v").select("*").execute()
     return Response(res.data)
 
 
@@ -183,7 +171,7 @@ def species_info(request):
     if not name:
         return JsonResponse({"detail": "Missing `name` parameter"}, status=400)
 
-    sb = _sb_for(request)
+    sb = client_for_request(request) 
     res = (
         sb.table("infos_especes")
           .select("*")

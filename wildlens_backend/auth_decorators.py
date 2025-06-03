@@ -1,38 +1,32 @@
 # mysite/auth_decorators.py
-
+from functools import wraps
 from django.http import JsonResponse
+import logging
+log = logging.getLogger("supabase")
 
 def supabase_login_required(view_func):
-    def wrapper(request, *args, **kwargs):
-        # 1) Make sure the middleware decoded the JWT and set supabase_user
-        if not hasattr(request, 'supabase_user'):
-            return JsonResponse({"error": "Not authenticated"}, status=401)
+    @wraps(view_func)
+    def _wrapped(request, *args, **kwargs):
+        if not hasattr(request, "supabase_user"):
+            log.debug("Decorator – no user on request")
+            return JsonResponse({"detail": "Not authenticated"}, status=401)
 
-        # 2) Pull out the user ID ("sub" claim) and save it to the session
-        #    so views (like user_dashboard) can read request.session["supabase_uid"]
-        uid = request.supabase_user.get('sub')
-        if uid:
-            request.session['supabase_uid'] = uid
-
+        # Keep UID in session for old code that reads request.session['supabase_uid']
+        request.session["supabase_uid"] = request.supabase_user["sub"]
         return view_func(request, *args, **kwargs)
-    return wrapper
+    return _wrapped
 
 
 def supabase_admin_required(view_func):
-    def wrapper(request, *args, **kwargs):
-        # Cool, they're logged in?
-        if not hasattr(request, 'supabase_user'):
-            return JsonResponse({"error": "Not authenticated"}, status=401)
+    @wraps(view_func)
+    def _wrapped(request, *args, **kwargs):
+        if not hasattr(request, "supabase_user"):
+            return JsonResponse({"detail": "Not authenticated"}, status=401)
 
-        # Make sure we still have the uid in session for downstream
-        uid = request.supabase_user.get('sub')
-        if uid:
-            request.session['supabase_uid'] = uid
+        app_meta = request.supabase_user.get("app_metadata", {}) or {}
+        if app_meta.get("role") != "admin":
+            return JsonResponse({"detail": "Not authorized"}, status=403)
 
-        # 3) Check their role
-        app_metadata = request.supabase_user.get('app_metadata') or {}
-        if app_metadata.get('role') != 'admin':
-            return JsonResponse({"error": "Not authorized"}, status=403)
-
+        request.session["supabase_uid"] = request.supabase_user["sub"]
         return view_func(request, *args, **kwargs)
-    return wrapper
+    return _wrapped
