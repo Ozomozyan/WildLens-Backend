@@ -4,6 +4,7 @@ venv/
 *.env
 .idea/
 .vscode/
+front-end-application/
 
 # ─── Git & CI artefacts ─────────────────────────────
 .git/

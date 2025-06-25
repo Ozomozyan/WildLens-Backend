@@ -22,6 +22,8 @@ import json
 from torchvision import transforms, models
 from ai.predict import _latest_run
 
+from ai.api.hpsearch import router as hpsearch_router
+
 # ──────────────────────────────────────────────────────────────
 # Environment / config
 # ──────────────────────────────────────────────────────────────
@@ -42,6 +44,8 @@ app = FastAPI(
     description="Stateless species-prediction micro-service",
     version="1.0",
 )
+
+app.include_router(hpsearch_router)
 
 # Optional CORS if you call the AI service directly from the front-end
 app.add_middleware(
@@ -64,14 +68,17 @@ if isinstance(ckpt, torch.jit.ScriptModule):
     model   = ckpt
     classes = os.getenv("CLASSES", "").split(",")  # fallback if wanted
 else:
-    # State-dict path (what the training script saves)
-    classes = ckpt.pop("classes", None)
+    classes = ckpt.get("classes")
     if classes is None:
-        classes = json.loads((MODEL_PATH.parent / "labels.json").read_text())
+        labels_file = MODEL_PATH.parent / "labels.json"
+        classes = json.loads(labels_file.read_text())
+
     model = models.resnet18(weights=None)
-    # — match the single‐Linear head you trained with —
     model.fc = torch.nn.Linear(model.fc.in_features, len(classes))
-    model.load_state_dict(ckpt)
+
+    # the *actual* weights live under "state_dict" in your checkpoint
+    state_dict = ckpt["state_dict"] if "state_dict" in ckpt else ckpt
+    model.load_state_dict(state_dict)
 
 model.to(DEVICE).eval()
 

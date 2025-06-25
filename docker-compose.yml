@@ -3,6 +3,8 @@ services:
     build:
       context: .               # ← use repo root so we can COPY both ai/ and api/
       dockerfile: ai/Dockerfile
+    shm_size: "2g"
+    mem_limit: 8g 
     env_file: .env
     ports:
       - "8001:8001"
@@ -28,7 +30,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - AI_SERVICE_URL=http://ai:8001/predict
+      - AI_SERVICE_URL=http://ai:8001
       - GUNICORN_CMD_ARGS=\
           --access-logfile /app/logs/gunicorn.log \
           --error-logfile  /app/logs/gunicorn.log \

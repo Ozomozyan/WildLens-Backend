@@ -110,3 +110,27 @@ export async function triggerTraining({ batch, epochs, token }) {
   return res.data;                            // → { detail }
 }
 
+
+
+
+// ─── Hyper-param search (admin only) ─────────────────────────────
+export const triggerHpSearch = ({ trials = 20, study = "prod", token }) =>
+  api.post(
+    "/admin-dashboard/run-hpsearch/",
+    { trials, study },
+    {
+      headers:        { Authorization: `Bearer ${token}` },
+      withCredentials:true,
+    }
+  ).then(r => r.data);            // → { status:"accepted", … }
+
+export const downloadBestConfig = ({ study = "prod", token }) =>
+  api.get(
+    "/admin-dashboard/hpsearch-best/",
+    {
+      params:         { study },
+      headers:        { Authorization: `Bearer ${token}` },
+      withCredentials:true,
+      responseType:   "text",     // YAML, not JSON
+    }
+  );            // → YAML string

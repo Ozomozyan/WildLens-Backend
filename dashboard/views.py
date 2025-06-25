@@ -1,6 +1,6 @@
 # dashboard/views.py
 
-import os, jwt
+import os, jwt, httpx
 import requests
 from django.shortcuts import render, redirect
 from django.http import HttpResponse, JsonResponse, StreamingHttpResponse
@@ -23,6 +23,8 @@ from collections import Counter
 # 🔧 PATCH ❶ – put near the other imports at the top
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+
+from api.services.ai_client import launch_hp_search, download_best_config
 
 LOG_FILE = os.getenv("GUNICORN_LOG", "/app/logs/gunicorn.log")
 
@@ -898,3 +900,45 @@ def logs_api(request):
     with open(LOG_FILE, "r") as fp:
         payload = tail(fp, lines)
     return Response(payload, content_type="text/plain")
+
+
+
+
+
+
+
+# ───────────────────────────────────────────────────────────
+@api_view(["POST"])
+@supabase_admin_required
+def run_hpsearch(request):
+    """
+    Admin API: POST /admin-dashboard/run-hpsearch/
+      JSON body (optional):
+        { "trials": 30, "study": "prod" }
+    """
+    trials = int(request.data.get("trials", 20))
+    study  = request.data.get("study", "prod")
+
+    try:
+        payload = launch_hp_search(trials=trials, study=study)
+    except Exception as exc:
+        return Response({"detail": f"AI service error: {exc}"}, status=502)
+
+    return Response(payload, status=202)   # Accepted
+
+
+@api_view(["GET"])
+@supabase_admin_required
+def hpsearch_best_config(request):
+    """
+    Admin API: GET /admin-dashboard/hpsearch-best/?study=prod
+    Streams best_config.yaml (x-yaml). 404 until study finishes.
+    """
+    study = request.GET.get("study", "prod")
+    try:
+        yaml_text = download_best_config(study)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            return Response({"detail": "study still running"}, status=404)
+        raise
+    return Response(yaml_text, content_type="application/x-yaml")
