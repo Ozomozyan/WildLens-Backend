@@ -1,103 +1,109 @@
 #!/usr/bin/env python3
 """
-Run an Optuna study that launches multiple training runs of
-ai/train_model.py and maximises Macro-F1 on the validation set.
-
-The best config is written to:
-    ai/runs/hpsearch/<study_name>/best_config.yaml
+Optuna hyper-parameter search for ai/train_model.py
+Maximises validation Macro-F1. Best params are saved to
+    ai/runs/hpsearch/<study>/best_config.yaml
 """
-
 from __future__ import annotations
-import subprocess, sys, json, uuid, yaml, shutil, os 
+import subprocess, sys, json, uuid, yaml, os
 from pathlib import Path
 import optuna
 from optuna.exceptions import TrialPruned
 
-THIS_DIR   = Path(__file__).parent
-RUNS_DIR   = THIS_DIR / "runs"
-HP_DIR     = RUNS_DIR / "hpsearch"
-HP_DIR.mkdir(parents=True, exist_ok=True)
+# ───────────────────────── paths ─────────────────────────
+THIS_DIR  = Path(__file__).parent
+RUNS_DIR  = THIS_DIR / "runs"
+HP_DIR    = RUNS_DIR / "hpsearch";   HP_DIR.mkdir(exist_ok=True, parents=True)
+TRAIN_PY  = THIS_DIR / "train_model.py"
 
-TRAIN_PY   = THIS_DIR / "train_model.py"
-
-# -------------------------------------------------------------------------
+# ───────────────────── objective fn ──────────────────────
 def objective(trial: optuna.Trial) -> float:
-    # ---- define the search space ----------------------------------------
-    lr          = trial.suggest_float("lr",          1e-5,  1e-2, log=True)
-    wd          = trial.suggest_float("weight_decay",1e-6,  1e-3, log=True)
-    dropout     = trial.suggest_float      ("dropout",    0.0,   0.5)
-    batch_size  = trial.suggest_categorical("batch_size", [8, 16, 32])
-    acc_steps   = trial.suggest_categorical("acc_steps",  [1, 2])
 
-    # ---- launch one training run ----------------------------------------
+    # ── define search space ──────────────────────────────
+    lr_head  = trial.suggest_float("lr_head",  1e-5, 5e-3, log=True)
+    lr_fine  = trial.suggest_float("lr_fine",  1e-5, 1e-3, log=True)
+    wd_head  = trial.suggest_float("wd_head",  1e-6, 1e-3, log=True)
+    wd_fine  = trial.suggest_float("wd_fine",  1e-6, 5e-4, log=True)
+    dropout  = trial.suggest_float("dropout",  0.0,  0.5)
+    batch_sz = trial.suggest_categorical("batch_size", [8, 16, 32])
+    acc_steps= trial.suggest_categorical("acc_steps",  [1, 2])
+
+    # ── launch one training run ──────────────────────────
     run_id = f"hp-{trial.number}-{uuid.uuid4().hex[:6]}"
     cmd = [
         sys.executable, str(TRAIN_PY),
-        "--run-id",    run_id,
-        "--batch-size",str(batch_size),
-        "--acc-steps", str(acc_steps),
-        "--epochs",    "6",                 # keep it short per trial
+        "--run-id",        run_id,
+        "--batch-size",    str(batch_sz),
+        "--acc-steps",     str(acc_steps),
+        "--freeze-epochs", "2",      # so every 6-epoch trial fine-tunes 4
+        "--epochs",        "6",
     ]
-    # pass LR / WD / dropout via env vars understood inside train_model.py
-    env = {**os.environ,
-           "PYTHONHASHSEED":"0",
-           "LR_OVERRIDE": str(lr),
-           "WD_OVERRIDE": str(wd),
-           "DROPOUT":     str(dropout),
-           # keep DataLoader lean; comment out if you prefer workers
-           "NUM_WORKERS":"0",
-           "PIN_MEMORY":"0"}
+
+    env = {
+        **os.environ,
+        "PYTHONHASHSEED":  "0",
+        # names already read inside train_model.py
+        "LR_HEAD":  str(lr_head),
+        "LR_FINE":  str(lr_fine),
+        "WD_HEAD":  str(wd_head),
+        "WD_FINE":  str(wd_fine),
+        "DROPOUT":  str(dropout),
+        # DataLoader housekeeping (optional)
+        "NUM_WORKERS": "0",
+        "PIN_MEMORY":  "0",
+    }
 
     try:
-        subprocess.run(cmd, env=env, check=True, stdout=subprocess.DEVNULL)
+        subprocess.run(cmd, env=env, check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except subprocess.CalledProcessError as exc:
-        # -9  == SIGKILL  (most often OOM)  |  -11 == SIGSEGV
+        # -9 (SIGKILL) or -11 (SIGSEGV)  ⇒ likely out-of-memory – prune
         if exc.returncode in (-9, -11):
             raise TrialPruned()
         raise
 
-    # ---- read back the macro-F1 -----------------------------------------
-    metrics_path = RUNS_DIR / run_id / "metrics.json"
-    with open(metrics_path) as f:
-        macro_f1 = json.load(f)["macro_f1"]
+    # ── read back the validation score ──────────────────
+    metrics = RUNS_DIR / run_id / "metrics.json"
+    macro_f1 = json.loads(metrics.read_text())["macro_f1"]
 
-    # Let Optuna know so it can show pretty plots
-    trial.set_user_attr("run_id", run_id)
+    trial.set_user_attr("run_id", run_id)     # for pretty plots
     return macro_f1
 
-# -------------------------------------------------------------------------
+# ────────────────────────── main ─────────────────────────
 if __name__ == "__main__":
-    import os, argparse
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--trials",      type=int, default=30)
+    ap.add_argument("--study-name",  default="wildlens_hp")
+    args = ap.parse_args()
 
-    argp = argparse.ArgumentParser()
-    argp.add_argument("--trials", type=int, default=30)
-    argp.add_argument("--study-name", default="wildlens_hp")
-    args = argp.parse_args()
-
-    storage_url = f"sqlite:///{HP_DIR / (args.study_name + '.db')}"
+    storage = f"sqlite:///{HP_DIR / (args.study_name + '.db')}"
     study = optuna.create_study(direction="maximize",
                                 study_name=args.study_name,
-                                storage=storage_url,
+                                storage=storage,
                                 load_if_exists=True)
 
-    study.optimize(objective,
-                   n_trials=args.trials,
-                   show_progress_bar=True)
-    
-    from optuna.trial import TrialState
-    complete = [t for t in study.trials if t.state == TrialState.COMPLETE]
-    
-    if not complete:                       # ── nothing finished, exit cleanly
-        print("[!] All trials FAILED or PRUNED — no best parameters.")
-        sys.exit(0)                        # ← exit code 0 so FastAPI won’t raise
-    
-    print("[✓] Best value:", study.best_value)
-    print("[✓] Best params:", study.best_params)
-    
-    # ---- persist best config --------------------------------------------
-    out_cfg = HP_DIR / args.study_name / "best_config.yaml"
-    out_cfg.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_cfg, "w") as f:
-        yaml.dump(study.best_params, f)
-    
-    print("[✓] saved:", out_cfg.relative_to(Path.cwd()))
+    study.optimize(objective, n_trials=args.trials, show_progress_bar=True)
+
+    # ── report & save best config ────────────────────────
+    if study.best_trial:
+        print("\n[✓] Best value :", study.best_value)
+        print("[✓] Best params :", study.best_params)
+
+        out_cfg = HP_DIR / args.study_name / "best_config.yaml"
+        out_cfg.parent.mkdir(parents=True, exist_ok=True)
+        yaml.dump(study.best_params, out_cfg.open("w"))
+        print("[✓] saved      :", out_cfg.relative_to(Path.cwd()))
+
+        # ─── persist best model where the API expects it ───────────────
+        import shutil                                       # ← std-lib, safe to import here
+        best_run = Path(study.best_trial.user_attrs["run_id"])
+        src_dir  = RUNS_DIR / best_run
+        dst_dir  = RUNS_DIR / "hpsearch"                    # already created on top
+        shutil.copy(src_dir / "model.pt",  dst_dir / "model.pt")
+        shutil.copy(src_dir / "labels.json", dst_dir / "labels.json")
+        print(f"[✓] exported best checkpoint → {dst_dir/'model.pt'}")
+
+    else:
+        print("[!] No successful trials – nothing to save.")
+

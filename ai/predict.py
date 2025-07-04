@@ -40,13 +40,25 @@ def load_model(device: str | torch.device = "cpu"):
     labels  = json.loads((run_dir / "labels.json").read_text())
     n_cls   = len(labels)
 
-    model = torchvision.models.resnet18(weights=None)
-    model.fc = nn.Linear(model.fc.in_features, n_cls)
+    # ---------- read checkpoint --------------------
+    wrapper = torch.load(run_dir / "model.pt", map_location=device)
+    state   = wrapper["state_dict"] if "state_dict" in wrapper else wrapper
 
-    state = torch.load(run_dir / "model.pt", map_location=device)
-    model.load_state_dict(state)
-    model.to(device).eval()
-    return model, labels
+    # ---------- decide which head architecture was used ----
+    has_seq_head = any(k.startswith("fc.1.") for k in state.keys())
+
+    base = torchvision.models.resnet18(weights=None)
+    if has_seq_head:
+        base.fc = nn.Sequential(
+            nn.Dropout(p=0.0),
+            nn.Linear(base.fc.in_features, n_cls)
+        )
+    else:                                   # ← old single-Linear head
+        base.fc = nn.Linear(base.fc.in_features, n_cls)
+
+    base.load_state_dict(state, strict=True)
+    base.to(device).eval()
+    return base, labels
 
 _tf = transforms.Compose([
     transforms.Resize((IMG_SIZE, IMG_SIZE)),
