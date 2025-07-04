@@ -1,0 +1,5 @@
+{
+  "macro_f1": 0.055384617298841476,
+  "epochs": 25,
+  "effective_batch": 128
+}

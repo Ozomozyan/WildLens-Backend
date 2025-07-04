@@ -23,6 +23,11 @@ IMG_SIZE = 224
 RUNS_DIR = Path(__file__).parent / "runs"
 
 # ────────────────────────── core helpers ─────────────────────────
+
+
+IMNET_MEAN = (0.485, 0.456, 0.406)
+IMNET_STD  = (0.229, 0.224, 0.225)
+
 def _latest_run() -> Path:
     runs = [p for p in RUNS_DIR.iterdir() if p.is_dir()]
     if not runs:
@@ -45,7 +50,8 @@ def load_model(device: str | torch.device = "cpu"):
 
 _tf = transforms.Compose([
     transforms.Resize((IMG_SIZE, IMG_SIZE)),
-    transforms.ToTensor(),                         # training used no normalisation
+    transforms.ToTensor(),    
+    transforms.Normalize(IMNET_MEAN, IMNET_STD), # training used no normalisation
 ])
 
 @torch.inference_mode()

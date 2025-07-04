@@ -1,51 +1,81 @@
 #!/usr/bin/env python3
 """
-Train a fresh WildLens image-classifier, pulling every row from
-`footprint_images` ⇆ `infos_especes`.
+Train a WildLens footprint classifier with
+ • transfer-learning (ResNet-18 pretrained on ImageNet)
+ • two-phase training: (1) freeze backbone, (2) fine-tune whole net
+ • class-balanced WeightedRandomSampler
+ • focal-loss with per-class α-weights
+ • ReduceLROnPlateau keyed to validation macro-F1
 
-The trained model is saved permanently to:
-
-    ai/runs/<run-id>/model.pt
-    ai/runs/<run-id>/labels.json
+Artifacts are written to:
+    ai/runs/<run-id>/model.pt , labels.json , metrics.json , confusion_matrix.png
 """
 from __future__ import annotations
+
+# ───────────────────────────── imports ─────────────────────────────
+from pathlib import Path
+from datetime import datetime, UTC
+import argparse, os, json, tempfile, uuid, requests
+
+import torch, torchvision
+from torch import nn, optim
+from torch.utils.data import DataLoader, WeightedRandomSampler
+from torchvision import datasets, transforms
+from torchvision.models import resnet18, ResNet18_Weights
 
 from torchmetrics.classification import MulticlassF1Score
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 import matplotlib.pyplot as plt
-
-import argparse, os, tempfile, json, uuid, requests
-from datetime import datetime, UTC
-from pathlib import Path
-
 import supabase
-import torch, torchvision
-from torchvision import datasets, transforms
-from torch import nn, optim
+from dotenv import load_dotenv          # pip install python-dotenv
 
 from utils.dataset_stats import class_counts
-from torch.utils.data import DataLoader, WeightedRandomSampler
 
-
-from dotenv import load_dotenv      # ← new: pip install python-dotenv
-
+# ───────────────────────────── constants ──────────────────────────
 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
-# ────────────────────────────────  CONSTANTS  ────────────────────────────────
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")      # bypasses RLS
-IMG_SIZE     = 224                            # keep this fixed
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-ACC_STEPS_DEFAULT = int(os.getenv("ACC_STEPS", 1))   # gradient-accum steps
+IMG_SIZE     = 224
+RUNS_DIR     = Path(__file__).parent / "runs"; RUNS_DIR.mkdir(exist_ok=True)
+ACC_STEPS_DEFAULT = int(os.getenv("ACC_STEPS", 4))
+
+IMNET_MEAN = (0.485, 0.456, 0.406)
+IMNET_STD  = (0.229, 0.224, 0.225)
+
+# ────────────────────────── tunables ────────────────────────────
+PATIENCE      = int(os.getenv("EARLY_STOP_PATIENCE", 4))   # early-stop patience
+LABEL_SMOOTH  = float(os.getenv("LABEL_SMOOTH", 0.10))     # 0 → off
+WD_HEAD       = float(os.getenv("WD_HEAD", 1e-4))
+WD_FINE       = float(os.getenv("WD_FINE", 5e-5))
 
 
-# Permanent location for trained artefacts
-RUNS_DIR = Path(__file__).parent / "runs"
-RUNS_DIR.mkdir(exist_ok=True, parents=True)
+# ──────────────────────── focal-loss helper ───────────────────────
+class FocalLoss(nn.Module):
+    """
+    Multi-class focal loss with optional per-class α and label smoothing.
+    """
+    def __init__(self, alpha=None, gamma: float = 2.0, label_smooth: float = 0.0):
+        super().__init__()
+        self.alpha        = alpha          # tensor [C] or None
+        self.gamma        = gamma
+        self.label_smooth = label_smooth
 
-# ────────────────────────────────  HELPERS  ──────────────────────────────────
+    def forward(self, logits, targets):
+        ce = nn.functional.cross_entropy(
+            logits, targets,
+            weight=self.alpha,
+            reduction="none",
+            label_smoothing=self.label_smooth  # ← just one line!
+        )
+        pt    = torch.exp(-ce)               # prob of correct class
+        focal = ((1 - pt) ** self.gamma) * ce
+        return focal.mean()
+
+
+# ───────────────────────── data helpers ───────────────────────────
 def fetch_metadata(sb):
-    """Return list of images with a human-readable 'label' key."""
     imgs  = sb.table("footprint_images").select("*").execute().data
     specs = sb.table("infos_especes").select("id,Espèce").execute().data
     name_map = {s["id"]: s["Espèce"] for s in specs}
@@ -54,232 +84,237 @@ def fetch_metadata(sb):
     return imgs
 
 def download_dataset(rows, root: Path):
-    """Stream every image; skip if URL dead or file unreadable."""
-    import errno
     from PIL import Image, UnidentifiedImageError
-
     for r in rows:
-        tgt_dir = root / r["label"]
-        tgt_dir.mkdir(parents=True, exist_ok=True)
+        tgt_dir = root / r["label"]; tgt_dir.mkdir(parents=True, exist_ok=True)
         tgt = tgt_dir / r["image_name"]
-
         if tgt.exists():
-            # Quick integrity check — remove if unreadable
             try:
-                with Image.open(tgt) as im:
-                    im.verify()
-                continue                       # fine
-            except (FileNotFoundError, UnidentifiedImageError, OSError):
-                tgt.unlink(missing_ok=True)    # force re-download
-
+                with Image.open(tgt) as im: im.verify(); continue
+            except (UnidentifiedImageError, OSError): tgt.unlink(missing_ok=True)
         try:
             with requests.get(r["image_url"], stream=True, timeout=30) as resp:
                 resp.raise_for_status()
                 with open(tgt, "wb") as f:
-                    for chunk in resp.iter_content(1 << 16):
-                        f.write(chunk)
-            # second integrity check
-            with Image.open(tgt) as im:
-                im.verify()
-        except Exception as e:                 # 404, corruption, etc.
+                    for chunk in resp.iter_content(1 << 16): f.write(chunk)
+            with Image.open(tgt) as im: im.verify()
+        except Exception as e:
             print(f"[WARN] skipped {r['image_url']} – {e}")
-            tgt.unlink(missing_ok=True)        # ensure bad file is gone
+            tgt.unlink(missing_ok=True)
 
 def build_dataloaders(root: Path, batch: int):
     tfm = transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.ToTensor(),
+        transforms.Normalize(IMNET_MEAN, IMNET_STD),
     ])
     full_ds = datasets.ImageFolder(root, tfm)
-
     if len(full_ds) == 0:
         raise RuntimeError(f"ImageFolder found 0 images in {root}")
 
-    # ─── prune out any samples whose files are missing or corrupt ────────────
-    ok_indices = [
-        i for i, (path, _) in enumerate(full_ds.samples)
-        if Path(path).is_file()
-    ]
-    if len(ok_indices) < len(full_ds):
-        print(f"[INFO] pruned {len(full_ds) - len(ok_indices)} broken entries")
+    # prune corrupt entries
+    ok_indices = [i for i,(p,_) in enumerate(full_ds.samples)
+                  if Path(p).is_file()]
 
-    # ─── now do an 80/20 split on only the OK indices ───────────────────────
-    n = len(ok_indices)
-    split = int(0.8 * n)
-    train_idx = ok_indices[:split]
-    val_idx   = ok_indices[split:]
+    # ─── stratified 80 / 20 split – keeps every class in each split ───
+    from collections import defaultdict
+    import random
+    random.seed(0)                         # reproducible order
+
+    by_cls = defaultdict(list)
+    for idx in ok_indices:
+        by_cls[ full_ds.targets[idx] ].append(idx)
+
+    train_idx, val_idx = [], []
+    for cls, idxs in by_cls.items():
+        random.shuffle(idxs)
+        k = max(1, int(0.8 * len(idxs)))  # at least 1 sample per split
+        train_idx += idxs[:k]
+        val_idx   += idxs[k:]
+
 
     train_ds = torch.utils.data.Subset(full_ds, train_idx)
     val_ds   = torch.utils.data.Subset(full_ds, val_idx)
 
-    # ─── class-balanced sampler ─────────────────────────────────────────────
     counts, _ = class_counts(root)
     max_n = max(counts.values())
     targets_subset = [full_ds.targets[i] for i in train_idx]
     weights = [max_n / counts[t] for t in targets_subset]
-    sampler = WeightedRandomSampler(weights,
-                                    num_samples=len(weights),
+    sampler = WeightedRandomSampler(weights, num_samples=len(weights),
                                     replacement=True)
+    
+    # quick check that the WeightedRandomSampler sees each class
+    from collections import Counter
+    drawn = [targets_subset[i] for i in torch.multinomial(
+                 torch.tensor(weights), 2000, replacement=True)]
+    print("Sampler draw (2 000 samples):", Counter(drawn))
 
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=batch,
-        sampler=sampler,
-        num_workers=4,
-    )
-    # <<< validation loader with single worker to avoid crashes >>>
-    val_loader = DataLoader(
-        val_ds,
-        batch_size=batch,
-        shuffle=False,
-        num_workers=0,
-    )
+
+    train_loader = DataLoader(train_ds, batch_size=batch,
+                              sampler=sampler, num_workers=0)
+    val_loader   = DataLoader(val_ds,   batch_size=batch,
+                              shuffle=False, num_workers=0)
 
     print("Class counts :", counts)
-    print("Sample wgt   :", {k: round(max_n/v, 2) for k, v in counts.items()})
-    return train_loader, val_loader, full_ds.classes
+    print("Sample wgt   :", {k: round(max_n/v,2) for k,v in counts.items()})
+    return train_loader, val_loader, full_ds.classes, counts
 
+# ───────────────────────── training logic ─────────────────────────
+def evaluate(model, loader, device, n_classes):
+    metric = MulticlassF1Score(num_classes=n_classes,
+                               average="macro").to(device)
+    y_true, y_pred = [], []
+    model.eval()
+    with torch.no_grad():
+        for xb, yb in loader:
+            xb, yb = xb.to(device), yb.to(device)
+            preds  = model(xb).argmax(1)
+            metric.update(preds, yb)
+            y_true.append(yb.cpu()); y_pred.append(preds.cpu())
+    return metric.compute().item(), torch.cat(y_true).numpy(), torch.cat(y_pred).numpy()
 
-def train_loop(train, val, n_classes: int, epochs: int, acc_steps: int):
-    model = torchvision.models.resnet18(weights=None)
-    model.fc = nn.Linear(model.fc.in_features, n_classes)
+def train_loop(train, val, n_classes, counts,
+               epochs: int, acc_steps: int, freeze_epochs: int):
+    """
+    Two-phase training:
+        phase-1 (frozen backbone)  : Adam on classifier head
+        phase-2 (fine-tune entire) : Adam + cosine annealing
+    Early-stops when val-macro-F1 hasn’t improved for PATIENCE epochs.
+    """
     device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # ─── create model ───
+    model = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+    model.fc = nn.Linear(model.fc.in_features, n_classes)
+
+    for p in model.parameters():   p.requires_grad = False
+    for p in model.fc.parameters(): p.requires_grad = True
     model.to(device)
-    
-    lr = float(os.getenv("LR_OVERRIDE", 1e-4))        # Optuna sets these
-    wd = float(os.getenv("WD_OVERRIDE", 0.0))
-    dp = float(os.getenv("DROPOUT",     0.0))
 
-    # override dropout probability in every Dropout layer, if any
-    if dp > 0:
-        for m in model.modules():
-            if isinstance(m, nn.Dropout):
-                m.p = dp
+    # ─── optimiser + scheduler (phase-1) ───
+    lr_head = float(os.getenv("LR_HEAD", 5e-4))
+    opt  = optim.Adam(model.fc.parameters(), lr=lr_head, weight_decay=WD_HEAD)
+    sched = optim.lr_scheduler.ReduceLROnPlateau(
+        opt, mode="max", factor=0.5, patience=2, min_lr=1e-5)
 
-    opt = optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
-    ce  = nn.CrossEntropyLoss()
+    # ─── focal-loss with label smoothing ───
+    max_n  = max(counts.values())
+    alpha  = torch.tensor([max_n / counts[c] for c in range(n_classes)],
+                          dtype=torch.float, device=device)
+    criterion = FocalLoss(alpha=alpha, gamma=2.0, label_smooth=LABEL_SMOOTH)
+
+    best_f1      = 0.
+    epochs_since = 0                       # early-stop counter
 
     eff_batch = train.batch_size * acc_steps
     print(f"[INFO] mini-batch={train.batch_size}  acc_steps={acc_steps}  "
           f"→ effective_batch={eff_batch}")
 
-    best_f1 = 0.0
     for ep in range(epochs):
+
+        # ─── switch to fine-tuning (unfreeze) ───
+        if ep == freeze_epochs:
+            for p in model.parameters(): p.requires_grad = True
+            lr_fine = float(os.getenv("LR_FINE", 1e-4))
+            opt  = optim.Adam(model.parameters(), lr=lr_fine, weight_decay=WD_FINE)
+            sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+                opt, T_max=epochs-ep, eta_min=1e-6)
+            print(f"[INFO] ↻ unfreezing backbone (lr={lr_fine}, wd={WD_FINE})")
+
+        # ─── one epoch of training ───
         model.train()
-        running = 0.0
-        opt.zero_grad()                         # clear once per epoch
+        running = 0.
+        opt.zero_grad()
 
         for i, (xb, yb) in enumerate(train, 1):
             xb, yb = xb.to(device), yb.to(device)
-            loss = ce(model(xb), yb) / acc_steps   # scale
+            loss   = criterion(model(xb), yb) / acc_steps
             loss.backward()
 
             if i % acc_steps == 0 or i == len(train):
                 opt.step()
                 opt.zero_grad()
 
-            running += loss.item() * acc_steps     # undo scaling for log
+            running += loss.item() * acc_steps
 
-        # after the training loop for this epoch, evaluate on validation set
-        macro_f1, _, _ = evaluate(model, val, device, n_classes)
+        # ─── evaluate ───
+        val_f1,  _, _ = evaluate(model, val,   device, n_classes)
+        train_f1, _, _ = evaluate(model, train, device, n_classes)
         print(f"[epoch {ep+1:02d}/{epochs}] "
-            f"loss={running/len(train):.4f}  macroF1={macro_f1:.4f}")
-        
-        best_f1 = max(best_f1, macro_f1)
+              f"loss={running/len(train):.4f}  "
+              f"trainF1={train_f1:.3f}  valF1={val_f1:.3f}")
 
-    return model
+        # update scheduler
+        if isinstance(sched, optim.lr_scheduler.ReduceLROnPlateau):
+            sched.step(val_f1)
+        else:  # cosine
+            sched.step()
 
+        # ─── early stopping ───
+        if val_f1 > best_f1 + 1e-4:
+            best_f1      = val_f1
+            epochs_since = 0
+        else:
+            epochs_since += 1
+            if epochs_since >= PATIENCE:
+                print(f"[INFO] Early-stopping after {ep+1} epochs "
+                      f"(no valF1 gain for {PATIENCE} epochs)")
+                break
 
-def evaluate(model, loader, device, n_classes: int):
-    """Return (macro_f1, y_true, y_pred) on the given loader."""
-    metric = MulticlassF1Score(num_classes=n_classes,
-                               average="macro").to(device)
-    model.eval()
-    all_true, all_pred = [], []
+    return model, best_f1
 
-    with torch.no_grad():
-        for xb, yb in loader:
-            xb, yb = xb.to(device), yb.to(device)
-            logits = model(xb)
-            preds  = logits.argmax(dim=1)
-            metric.update(preds, yb)
-            all_true.append(yb.cpu())
-            all_pred.append(preds.cpu())
-
-    macro_f1 = metric.compute().item()
-    y_true = torch.cat(all_true).numpy()
-    y_pred = torch.cat(all_pred).numpy()
-    return macro_f1, y_true, y_pred
-
-
-# ────────────────────────────────  MAIN  ─────────────────────────────────────
-def main(run_id: str, batch_size: int, epochs: int, acc_steps: int):
+# ────────────────────────────── main ──────────────────────────────
+def main(run_id, batch_size, epochs, acc_steps, freeze_epochs):
     sb = supabase.create_client(SUPABASE_URL, SUPABASE_KEY)
 
-    # Use a temp dir ONLY for the image cache
     with tempfile.TemporaryDirectory() as tmpdir:
-        data_root = Path(tmpdir) / "data"
+        root = Path(tmpdir)/"data"
 
         print("[*] Fetching metadata …")
         rows = fetch_metadata(sb)
-        print(f"    → {len(rows):,} images / {len(set(r['label'] for r in rows))} species")
+        print(f"    → {len(rows):,} images / "
+              f"{len(set(r['label'] for r in rows))} species")
 
         print("[*] Downloading images …")
-        download_dataset(rows, data_root)
+        download_dataset(rows, root)
 
         print("[*] Building dataloaders …")
-        train, val, classes = build_dataloaders(data_root, batch_size)
+        train,val,classes,counts = build_dataloaders(root, batch_size)
 
-        print(f"[*] Training for {epochs} epochs (batch={batch_size}, acc_steps={acc_steps}) …")
-        model = train_loop(train, val, len(classes), epochs, acc_steps)
+        print(f"[*] Training ({epochs} epochs)…")
+        model,macro_f1 = train_loop(train,val,len(classes),
+                                    counts,epochs,acc_steps,freeze_epochs)
 
-        # ─── FINAL EVAL + CONFUSION MATRIX ────────────────────────────────────
-        device = "cuda" if torch.cuda.is_available() else "cpu"    # <─ NEW
+        # final evaluation & confusion matrix
+        device = "cuda" if torch.cuda.is_available() else "cpu"
         macro_f1, y_true, y_pred = evaluate(model, val, device, len(classes))
         print(f"[✓] FINAL Macro-F1 = {macro_f1:.4f}")
 
-        cm = confusion_matrix(y_true, y_pred, labels=range(len(classes)))
-        fig, ax = plt.subplots(figsize=(6, 6))
+        cm = confusion_matrix(y_true,y_pred,labels=range(len(classes)))
+        fig,ax = plt.subplots(figsize=(6,6))
         disp = ConfusionMatrixDisplay(cm, display_labels=classes)
         disp.plot(ax=ax, colorbar=False, xticks_rotation=45)
         fig.tight_layout()
 
-        # Create the run directory and persist artifacts
-        artefacts = RUNS_DIR / run_id
-        artefacts.mkdir(parents=True, exist_ok=False)
-
-        fig.savefig(artefacts / "confusion_matrix.png")
-        plt.close(fig)
-
-        (artefacts / "metrics.json").write_text(json.dumps({
+        artefacts = RUNS_DIR / run_id; artefacts.mkdir(parents=True, exist_ok=False)
+        fig.savefig(artefacts/"confusion_matrix.png"); plt.close(fig)
+        (artefacts/"metrics.json").write_text(json.dumps({
             "macro_f1": macro_f1,
-            "epochs": epochs,
-            "effective_batch": batch_size * acc_steps
-        }, indent=2))
-        # ────────────────────────────────────────────────────────────────────────
+            "epochs":   epochs,
+            "effective_batch": batch_size*acc_steps
+        },indent=2))
 
-        # ─── THEN save the model + labels as before ───────────────────────────
-        torch.save(
-            {"classes": classes, "state_dict": model.state_dict()},
-            artefacts / "model.pt",
-        )
-        (artefacts / "labels.json").write_text(
-            json.dumps(classes, ensure_ascii=False, indent=2)
-        )
-
+        torch.save({"classes":classes, "state_dict":model.state_dict()},
+                   artefacts/"model.pt")
+        (artefacts/"labels.json").write_text(json.dumps(classes,ensure_ascii=False,indent=2))
         print("[✓] Saved model and metrics to", artefacts.relative_to(Path.cwd()))
 
 if __name__ == "__main__":
-    argp = argparse.ArgumentParser()
-    argp.add_argument(
-        "--run-id",
-        default=datetime.now(UTC).strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6],
-        help="unique identifier; auto-generated if omitted",
-    )
-    argp.add_argument("--batch-size", type=int,
-                      default=int(os.getenv("TRAIN_BATCH_SIZE", 32)))
-    argp.add_argument("--epochs", type=int,
-                      default=int(os.getenv("TRAIN_EPOCHS", 10)))
-    argp.add_argument("--acc-steps", type=int, default=ACC_STEPS_DEFAULT,
-                    help="number of gradient-accumulation steps (>=1)")
-    main(**vars(argp.parse_args()))
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--run-id", default=datetime.now(UTC).strftime("%Y%m%d-%H%M%S")+"-"+uuid.uuid4().hex[:6])
+    ap.add_argument("--batch-size", type=int, default=int(os.getenv("TRAIN_BATCH_SIZE", 32)))
+    ap.add_argument("--epochs",     type=int, default=int(os.getenv("TRAIN_EPOCHS",   30)))
+    ap.add_argument("--acc-steps",  type=int, default=ACC_STEPS_DEFAULT)
+    ap.add_argument("--freeze-epochs", type=int, default=int(os.getenv("FREEZE_EPOCHS", 5)),
+                    help="epochs to train head-only before fine-tuning backbone")
+    main(**vars(ap.parse_args()))
