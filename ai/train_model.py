@@ -208,7 +208,7 @@ def train_loop(train, val, n_classes, counts,
 
     eff_batch = train.batch_size * acc_steps
     print(f"[INFO] mini-batch={train.batch_size}  acc_steps={acc_steps}  "
-          f"→ effective_batch={eff_batch}")
+          f"-> effective_batch={eff_batch}")
 
     for ep in range(epochs):
 
@@ -265,49 +265,70 @@ def train_loop(train, val, n_classes, counts,
 
 # ────────────────────────────── main ──────────────────────────────
 def main(run_id, batch_size, epochs, acc_steps, freeze_epochs):
-    sb = supabase.create_client(SUPABASE_URL, SUPABASE_KEY)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        root = Path(tmpdir)/"data"
+    dummy_root = os.getenv("DUMMY_DATA_ROOT")
+    use_dummy  = bool(dummy_root)
+
+    # 0. choose data source ---------------------------------------------------
+    if use_dummy:
+        print("[INFO] DUMMY_DATA_ROOT detected – skipping Supabase")
+        rows = []                                      # not used
+        data_parent = Path(dummy_root).expanduser().resolve()
+    else:
+        sb   = supabase.create_client(SUPABASE_URL, SUPABASE_KEY)
+        rows = fetch_metadata(sb)
+
+    # 1. prepare workspace dir ------------------------------------------------
+    if use_dummy:
+        root = Path(tempfile.mkdtemp()) / "data"
+        import shutil
+        for src in data_parent.rglob("*.jpg"):
+            dst = root / src.relative_to(data_parent)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+    else:
+        tmpdir = tempfile.TemporaryDirectory()         # keep reference!
+        root   = Path(tmpdir.name) / "data"
 
         print("[*] Fetching metadata …")
-        rows = fetch_metadata(sb)
         print(f"    → {len(rows):,} images / "
-              f"{len(set(r['label'] for r in rows))} species")
+            f"{len(set(r['label'] for r in rows))} species")
 
         print("[*] Downloading images …")
         download_dataset(rows, root)
 
-        print("[*] Building dataloaders …")
-        train,val,classes,counts = build_dataloaders(root, batch_size)
+    # 2. common code: build loaders, train, save artefacts --------------------
+    print("[*] Building dataloaders …")
+    train, val, classes, counts = build_dataloaders(root, batch_size)
 
-        print(f"[*] Training ({epochs} epochs)…")
-        model,macro_f1 = train_loop(train,val,len(classes),
-                                    counts,epochs,acc_steps,freeze_epochs)
+    print(f"[*] Training ({epochs} epochs)…")
+    model, _ = train_loop(train, val, len(classes),
+                        counts, epochs, acc_steps, freeze_epochs)
 
-        # final evaluation & confusion matrix
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        macro_f1, y_true, y_pred = evaluate(model, val, device, len(classes))
-        print(f"[✓] FINAL Macro-F1 = {macro_f1:.4f}")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    macro_f1, y_true, y_pred = evaluate(model, val, device, len(classes))
+    # … (rest of the saving code unchanged) …
 
-        cm = confusion_matrix(y_true,y_pred,labels=range(len(classes)))
-        fig,ax = plt.subplots(figsize=(6,6))
-        disp = ConfusionMatrixDisplay(cm, display_labels=classes)
-        disp.plot(ax=ax, colorbar=False, xticks_rotation=45)
-        fig.tight_layout()
+    print(f"[OK] FINAL Macro-F1 = {macro_f1:.4f}")
 
-        artefacts = RUNS_DIR / run_id; artefacts.mkdir(parents=True, exist_ok=False)
-        fig.savefig(artefacts/"confusion_matrix.png"); plt.close(fig)
-        (artefacts/"metrics.json").write_text(json.dumps({
-            "macro_f1": macro_f1,
-            "epochs":   epochs,
-            "effective_batch": batch_size*acc_steps
-        },indent=2))
+    cm = confusion_matrix(y_true,y_pred,labels=range(len(classes)))
+    fig,ax = plt.subplots(figsize=(6,6))
+    disp = ConfusionMatrixDisplay(cm, display_labels=classes)
+    disp.plot(ax=ax, colorbar=False, xticks_rotation=45)
+    fig.tight_layout()
 
-        torch.save({"classes":classes, "state_dict":model.state_dict()},
-                   artefacts/"model.pt")
-        (artefacts/"labels.json").write_text(json.dumps(classes,ensure_ascii=False,indent=2))
-        print("[✓] Saved model and metrics to", artefacts.relative_to(Path.cwd()))
+    artefacts = RUNS_DIR / run_id; artefacts.mkdir(parents=True, exist_ok=False)
+    fig.savefig(artefacts/"confusion_matrix.png"); plt.close(fig)
+    (artefacts/"metrics.json").write_text(json.dumps({
+        "macro_f1": macro_f1,
+        "epochs":   epochs,
+        "effective_batch": batch_size*acc_steps
+    },indent=2))
+
+    torch.save({"classes":classes, "state_dict":model.state_dict()},
+                artefacts/"model.pt")
+    (artefacts/"labels.json").write_text(json.dumps(classes,ensure_ascii=False,indent=2))
+    print("[OK] Saved model and metrics to", artefacts.relative_to(Path.cwd()))
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
